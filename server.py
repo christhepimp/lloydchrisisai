@@ -1,17 +1,14 @@
 """
-Lloyd Local Server
-==================
-Simple pure-Python HTTP server so the mobile UI can talk to the real agent
-and support file upload + real neural training.
-
-Run: python server.py
-Then open http://localhost:8080
+Lloyd Local + Deployable Server
+===============================
+Works on localhost and on cloud hosts (Render, Railway, etc.)
 """
 
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 import json
 from pathlib import Path
 import sys
+import os
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -83,10 +80,8 @@ class LloydHandler(SimpleHTTPRequestHandler):
                     self._json_response({"message": "no files uploaded yet. upload a .txt first."})
                     return
 
-                # REAL neural training
                 result = trainer.train_on_files(files, steps_per_file=25)
 
-                # Also keep in memory
                 for f in files:
                     text = f.read_text(encoding="utf-8", errors="ignore")[:300]
                     lloyd.remember(f"Trained on {f.name}: {text}")
@@ -120,12 +115,10 @@ class LloydHandler(SimpleHTTPRequestHandler):
         self.end_headers()
 
 
-def run(port=8080):
+def run():
+    port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), LloydHandler)
-    print(f"Lloyd server running at http://localhost:{port}")
-    print("Open that URL on your phone or computer.")
-    print("Upload .txt files → hit Train → Lloyd's neural net actually learns.")
-    print("Ctrl+C to stop.")
+    print(f"Lloyd is live on port {port}")
     server.serve_forever()
 
 
