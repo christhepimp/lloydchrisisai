@@ -10,34 +10,43 @@
 - Pure-scratch vector memory  
 - Will grow into a real 3B parameter model  
 - Chat + image generation  
-- Mobile interface started  
+- Mobile interface with **file upload + train**  
 
-## Current Status (v0.2)
+## Current Status (v0.3)
 
-- Pure NumPy Tiny Transformer (decoder-only) from scratch  
-- Training loop skeleton (real backprop coming next)  
+- Pure NumPy Tiny Transformer with real learning (output layer + embeddings)  
 - Expanded English dictionary + Gen-Z slang  
-- Gen-Z personality & identity  
-- Simple vector memory  
-- Autonomous agent loop with goals  
-- Image generation placeholder (Lloyd can trigger it himself)  
-- Mobile-friendly web interface  
-- Terminal chat working  
+- Autonomous agent with goals  
+- Image generation placeholder  
+- Vector memory  
+- **Local server** so the mobile UI talks to the real agent  
+- **Upload files** and **Train** directly from the UI  
 
 ## How to run
 
-### Terminal
+### 1. Start the server
+```bash
+python server.py
+```
+
+### 2. Open the UI
+Go to **http://localhost:8080** on your computer or phone (same Wi-Fi).
+
+You can:
+- Chat with the real Lloyd
+- Hit **Upload** to send a `.txt` file
+- Hit **Train** so he learns from the uploaded files
+
+### Terminal only
 ```bash
 python main.py
 ```
-
-### Mobile Web Interface
-Open `interface/mobile_web/index.html` in a browser (or serve it).
 
 ## Project Structure
 
 ```
 lloydchrisisai/
+├── server.py                 ← local server (chat + upload + train)
 ├── main.py
 ├── lloyd/
 │   ├── agent.py
@@ -54,9 +63,9 @@ lloydchrisisai/
 
 ## Next priorities
 
-1. Real backpropagation for the Transformer so it can actually learn  
-2. Connect the mobile interface to the real Python agent  
-3. More advanced English rules  
-4. Scale architecture toward 3B  
+1. Feed real English data into the Transformer training loop  
+2. Full backprop through attention blocks  
+3. Better file parsing + actual token-level training from uploads  
+4. Scale toward 3B  
 
 Built by Chris + Lloyd.
