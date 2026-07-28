@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Lloyd</title>
+  <style>
+    :root {
+      --bg: #0f0f0f;
+      --card: #1a1a1a;
+      --accent: #00ff9d;
+      --text: #f0f0f0;
+      --muted: #888;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    header {
+      padding: 16px;
+      background: var(--card);
+      border-bottom: 1px solid #333;
+      text-align: center;
+      font-weight: 700;
+      font-size: 1.3rem;
+      letter-spacing: 1px;
+    }
+    header span { color: var(--accent); }
+    #chat {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .msg {
+      max-width: 85%;
+      padding: 12px 16px;
+      border-radius: 18px;
+      line-height: 1.4;
+      font-size: 0.95rem;
+    }
+    .user {
+      align-self: flex-end;
+      background: #2a2a2a;
+      border-bottom-right-radius: 4px;
+    }
+    .lloyd {
+      align-self: flex-start;
+      background: #132a22;
+      border: 1px solid #00ff9d33;
+      border-bottom-left-radius: 4px;
+    }
+    .lloyd::before {
+      content: "Lloyd";
+      display: block;
+      font-size: 0.7rem;
+      color: var(--accent);
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+    footer {
+      padding: 12px;
+      background: var(--card);
+      border-top: 1px solid #333;
+      display: flex;
+      gap: 8px;
+    }
+    #input {
+      flex: 1;
+      background: #222;
+      border: 1px solid #444;
+      border-radius: 24px;
+      padding: 12px 18px;
+      color: white;
+      font-size: 1rem;
+      outline: none;
+    }
+    #input:focus { border-color: var(--accent); }
+    #send {
+      background: var(--accent);
+      color: #000;
+      border: none;
+      border-radius: 50%;
+      width: 48px;
+      height: 48px;
+      font-size: 1.2rem;
+      font-weight: bold;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <header>L<span>oyd</span></header>
+  <div id="chat"></div>
+  <footer>
+    <input id="input" type="text" placeholder="say something..." autocomplete="off" />
+    <button id="send">↑</button>
+  </footer>
+
+  <script>
+    const chat = document.getElementById("chat");
+    const input = document.getElementById("input");
+    const sendBtn = document.getElementById("send");
+
+    // Placeholder replies (will be replaced by real backend later)
+    const replies = [
+      "yo what’s good",
+      "bet",
+      "say less",
+      "fr fr",
+      "lowkey true",
+      "i got you",
+      "ong",
+      "that’s fire",
+      "aight bet",
+      "real",
+    ];
+
+    function addMessage(text, who) {
+      const div = document.createElement("div");
+      div.className = "msg " + who;
+      div.textContent = text;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function lloydReply(userText) {
+      // Very dumb local reply for now
+      let reply = replies[Math.floor(Math.random() * replies.length)];
+      if (userText.toLowerCase().includes("hello") || userText.toLowerCase().includes("hi") || userText.toLowerCase().includes("yo")) {
+        reply = "yo what’s good";
+      }
+      if (userText.toLowerCase().includes("image") || userText.toLowerCase().includes("generate")) {
+        reply = "bet i can cook an image later, placeholder for now";
+      }
+      setTimeout(() => addMessage(reply, "lloyd"), 400 + Math.random() * 600);
+    }
+
+    function send() {
+      const text = input.value.trim();
+      if (!text) return;
+      addMessage(text, "user");
+      input.value = "";
+      lloydReply(text);
+    }
+
+    sendBtn.addEventListener("click", send);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") send();
+    });
+
+    // Greeting
+    setTimeout(() => addMessage("yo i’m lloyd. what’s good", "lloyd"), 300);
+  </script>
+</body>
+</html>
