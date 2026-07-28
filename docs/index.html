@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Lloyd</title>
+  <style>
+    :root {
+      --bg: #0f0f0f;
+      --card: #1a1a1a;
+      --accent: #00ff9d;
+      --text: #f0f0f0;
+      --muted: #888;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    header {
+      padding: 14px 16px;
+      background: var(--card);
+      border-bottom: 1px solid #333;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    header .title { font-weight: 700; font-size: 1.25rem; letter-spacing: 1px; }
+    header .title span { color: var(--accent); }
+    .actions { display: flex; gap: 8px; }
+    .actions button {
+      background: #222;
+      border: 1px solid #444;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+    #chat {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .msg {
+      max-width: 85%;
+      padding: 12px 16px;
+      border-radius: 18px;
+      line-height: 1.4;
+      font-size: 0.95rem;
+      white-space: pre-wrap;
+    }
+    .user {
+      align-self: flex-end;
+      background: #2a2a2a;
+      border-bottom-right-radius: 4px;
+    }
+    .lloyd {
+      align-self: flex-start;
+      background: #132a22;
+      border: 1px solid #00ff9d33;
+      border-bottom-left-radius: 4px;
+    }
+    .lloyd::before {
+      content: "Lloyd";
+      display: block;
+      font-size: 0.7rem;
+      color: var(--accent);
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+    .system {
+      align-self: center;
+      background: #222;
+      color: var(--muted);
+      font-size: 0.8rem;
+      border-radius: 12px;
+      padding: 8px 14px;
+    }
+    footer {
+      padding: 12px;
+      background: var(--card);
+      border-top: 1px solid #333;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    #input {
+      flex: 1;
+      background: #222;
+      border: 1px solid #444;
+      border-radius: 24px;
+      padding: 12px 18px;
+      color: white;
+      font-size: 1rem;
+      outline: none;
+    }
+    #input:focus { border-color: var(--accent); }
+    #send {
+      background: var(--accent);
+      color: #000;
+      border: none;
+      border-radius: 50%;
+      width: 48px;
+      height: 48px;
+      font-size: 1.2rem;
+      font-weight: bold;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="title">L<span>oyd</span></div>
+    <div class="actions">
+      <button id="infoBtn">Info</button>
+    </div>
+  </header>
+
+  <div id="chat"></div>
+
+  <footer>
+    <input id="input" type="text" placeholder="say something..." autocomplete="off" />
+    <button id="send">↑</button>
+  </footer>
+
+  <script>
+    const chat = document.getElementById("chat");
+    const input = document.getElementById("input");
+    const sendBtn = document.getElementById("send");
+
+    const greetings = ["yo what’s good", "hey what’s up", "sup", "yooo", "what’s good fr"];
+    const defaults = ["bet", "aight bet", "say less", "i got you", "lowkey true", "fr fr", "ong", "no cap", "real"];
+    const positive = ["that’s fire", "slay", "based", "lowkey goated", "bussin"];
+
+    function addMessage(text, who) {
+      const div = document.createElement("div");
+      div.className = "msg " + who;
+      div.textContent = text;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function lloydReply(text) {
+      const lower = text.toLowerCase();
+      if (lower.includes("hello") || lower.includes("hi") || lower.includes("yo") || lower.includes("hey") || lower.includes("sup")) {
+        return greetings[Math.floor(Math.random() * greetings.length)];
+      }
+      if (lower.includes("lloyd")) {
+        return ["yo that’s me", "yeah i’m lloyd", "present", "what’s good"][Math.floor(Math.random()*4)];
+      }
+      if (lower.includes("fire") || lower.includes("lit") || lower.includes("cool") || lower.includes("good") || lower.includes("love")) {
+        return positive[Math.floor(Math.random() * positive.length)];
+      }
+      if (lower.includes("train") || lower.includes("learn") || lower.includes("upload")) {
+        return "for real training open the full version with python server.py — this github pages version is the light client";
+      }
+      return defaults[Math.floor(Math.random() * defaults.length)];
+    }
+
+    function send() {
+      const text = input.value.trim();
+      if (!text) return;
+      addMessage(text, "user");
+      input.value = "";
+      setTimeout(() => {
+        addMessage(lloydReply(text), "lloyd");
+      }, 300 + Math.random() * 500);
+    }
+
+    sendBtn.addEventListener("click", send);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") send();
+    });
+
+    document.getElementById("infoBtn").addEventListener("click", () => {
+      addMessage("this is the public github pages version. full brain + real training needs the python server.", "system");
+    });
+
+    setTimeout(() => addMessage("yo i’m lloyd (github pages edition). what’s good", "lloyd"), 300);
+  </script>
+</body>
+</html>
