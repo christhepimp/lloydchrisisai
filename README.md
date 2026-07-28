@@ -10,46 +10,41 @@
 - Pure-scratch vector memory  
 - Will grow into a real 3B parameter model  
 - Chat + image generation  
-- Mobile interface with **file upload + train**  
+- Mobile interface with **file upload + real neural training**  
 
-## Current Status (v0.3)
+## Current Status (v0.4)
 
-- Pure NumPy Tiny Transformer with real learning (output layer + embeddings)  
+- Pure NumPy Tiny Transformer with real learning  
+- **Upload .txt files in the UI → hit Train → the neural net actually updates its weights**  
 - Expanded English dictionary + Gen-Z slang  
 - Autonomous agent with goals  
 - Image generation placeholder  
 - Vector memory  
-- **Local server** so the mobile UI talks to the real agent  
-- **Upload files** and **Train** directly from the UI  
+- Local server connecting UI ↔ real agent ↔ trainer  
 
 ## How to run
 
-### 1. Start the server
 ```bash
 python server.py
 ```
 
-### 2. Open the UI
-Go to **http://localhost:8080** on your computer or phone (same Wi-Fi).
+Then open **http://localhost:8080**
 
-You can:
-- Chat with the real Lloyd
-- Hit **Upload** to send a `.txt` file
-- Hit **Train** so he learns from the uploaded files
+1. Chat with Lloyd  
+2. Tap **Upload** and select a `.txt` file (any English text)  
+3. Tap **Train** — Lloyd’s Transformer runs real training steps on your file  
 
-### Terminal only
-```bash
-python main.py
-```
+You will see the loss going down in the response.
 
 ## Project Structure
 
 ```
 lloydchrisisai/
-├── server.py                 ← local server (chat + upload + train)
+├── server.py
 ├── main.py
 ├── lloyd/
 │   ├── agent.py
+│   ├── trainer.py          ← real neural training from uploads
 │   ├── english_engine.py
 │   ├── memory.py
 │   ├── personality.py
@@ -60,12 +55,5 @@ lloydchrisisai/
     └── mobile_web/
         └── index.html
 ```
-
-## Next priorities
-
-1. Feed real English data into the Transformer training loop  
-2. Full backprop through attention blocks  
-3. Better file parsing + actual token-level training from uploads  
-4. Scale toward 3B  
 
 Built by Chris + Lloyd.
