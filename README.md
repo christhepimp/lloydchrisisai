@@ -10,23 +10,29 @@
 - Pure-scratch vector memory  
 - Will grow into a real 3B parameter model  
 - Chat + image generation  
-- Mobile interface coming  
+- Mobile interface started  
 
-## Current Status (v0.1)
+## Current Status (v0.2)
 
 - Pure NumPy Tiny Transformer (decoder-only) from scratch  
-- Training loop skeleton  
-- Hard-coded English dictionary + basic rule engine  
+- Training loop skeleton (real backprop coming next)  
+- Expanded English dictionary + Gen-Z slang  
 - Gen-Z personality & identity  
 - Simple vector memory  
 - Autonomous agent loop with goals  
+- Image generation placeholder (Lloyd can trigger it himself)  
+- Mobile-friendly web interface  
 - Terminal chat working  
 
-## How to run right now
+## How to run
 
+### Terminal
 ```bash
 python main.py
 ```
+
+### Mobile Web Interface
+Open `interface/mobile_web/index.html` in a browser (or serve it).
 
 ## Project Structure
 
@@ -37,17 +43,20 @@ lloydchrisisai/
 │   ├── agent.py
 │   ├── english_engine.py
 │   ├── memory.py
-│   └── personality.py
-└── model/
-    └── tiny_transformer.py
+│   ├── personality.py
+│   └── image_gen.py
+├── model/
+│   └── tiny_transformer.py
+└── interface/
+    └── mobile_web/
+        └── index.html
 ```
 
-## Next steps
+## Next priorities
 
-1. Real backpropagation for the Transformer  
-2. Expand the English dictionary heavily  
-3. Mobile-friendly web interface  
-4. Image generation module  
-5. Scale the architecture toward 3B  
+1. Real backpropagation for the Transformer so it can actually learn  
+2. Connect the mobile interface to the real Python agent  
+3. More advanced English rules  
+4. Scale architecture toward 3B  
 
 Built by Chris + Lloyd.
