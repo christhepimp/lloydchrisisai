@@ -23,15 +23,26 @@
       overflow: hidden;
     }
     header {
-      padding: 16px;
+      padding: 14px 16px;
       background: var(--card);
       border-bottom: 1px solid #333;
-      text-align: center;
-      font-weight: 700;
-      font-size: 1.3rem;
-      letter-spacing: 1px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
-    header span { color: var(--accent); }
+    header .title { font-weight: 700; font-size: 1.25rem; letter-spacing: 1px; }
+    header .title span { color: var(--accent); }
+    .actions { display: flex; gap: 8px; }
+    .actions button {
+      background: #222;
+      border: 1px solid #444;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+    .actions button:active { background: #333; }
     #chat {
       flex: 1;
       overflow-y: auto;
@@ -46,6 +57,7 @@
       border-radius: 18px;
       line-height: 1.4;
       font-size: 0.95rem;
+      white-space: pre-wrap;
     }
     .user {
       align-self: flex-end;
@@ -66,12 +78,21 @@
       margin-bottom: 4px;
       font-weight: 600;
     }
+    .system {
+      align-self: center;
+      background: #222;
+      color: var(--muted);
+      font-size: 0.8rem;
+      border-radius: 12px;
+      padding: 8px 14px;
+    }
     footer {
       padding: 12px;
       background: var(--card);
       border-top: 1px solid #333;
       display: flex;
       gap: 8px;
+      align-items: center;
     }
     #input {
       flex: 1;
@@ -94,35 +115,38 @@
       font-size: 1.2rem;
       font-weight: bold;
       cursor: pointer;
+      flex-shrink: 0;
     }
+    #fileInput { display: none; }
   </style>
 </head>
 <body>
-  <header>L<span>oyd</span></header>
+  <header>
+    <div class="title">L<span>oyd</span></div>
+    <div class="actions">
+      <button id="uploadBtn">Upload</button>
+      <button id="trainBtn">Train</button>
+    </div>
+  </header>
+
   <div id="chat"></div>
+
   <footer>
     <input id="input" type="text" placeholder="say something..." autocomplete="off" />
     <button id="send">↑</button>
   </footer>
 
+  <input type="file" id="fileInput" accept=".txt,text/plain" />
+
   <script>
     const chat = document.getElementById("chat");
     const input = document.getElementById("input");
     const sendBtn = document.getElementById("send");
+    const uploadBtn = document.getElementById("uploadBtn");
+    const trainBtn = document.getElementById("trainBtn");
+    const fileInput = document.getElementById("fileInput");
 
-    // Placeholder replies (will be replaced by real backend later)
-    const replies = [
-      "yo what’s good",
-      "bet",
-      "say less",
-      "fr fr",
-      "lowkey true",
-      "i got you",
-      "ong",
-      "that’s fire",
-      "aight bet",
-      "real",
-    ];
+    const API = window.location.origin; // same origin when served by server.py
 
     function addMessage(text, who) {
       const div = document.createElement("div");
@@ -132,24 +156,23 @@
       chat.scrollTop = chat.scrollHeight;
     }
 
-    function lloydReply(userText) {
-      // Very dumb local reply for now
-      let reply = replies[Math.floor(Math.random() * replies.length)];
-      if (userText.toLowerCase().includes("hello") || userText.toLowerCase().includes("hi") || userText.toLowerCase().includes("yo")) {
-        reply = "yo what’s good";
-      }
-      if (userText.toLowerCase().includes("image") || userText.toLowerCase().includes("generate")) {
-        reply = "bet i can cook an image later, placeholder for now";
-      }
-      setTimeout(() => addMessage(reply, "lloyd"), 400 + Math.random() * 600);
-    }
-
-    function send() {
+    async function send() {
       const text = input.value.trim();
       if (!text) return;
       addMessage(text, "user");
       input.value = "";
-      lloydReply(text);
+
+      try {
+        const res = await fetch(API + "/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text })
+        });
+        const data = await res.json();
+        addMessage(data.reply || "...", "lloyd");
+      } catch (e) {
+        addMessage("(server not running — open via python server.py)", "system");
+      }
     }
 
     sendBtn.addEventListener("click", send);
@@ -157,8 +180,44 @@
       if (e.key === "Enter") send();
     });
 
+    // Upload
+    uploadBtn.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+
+      const form = new FormData();
+      form.append("file", file);
+
+      addMessage("uploading " + file.name + "...", "system");
+
+      try {
+        const res = await fetch(API + "/upload", {
+          method: "POST",
+          body: form
+        });
+        const data = await res.json();
+        addMessage(data.message || data.error || "uploaded", "system");
+      } catch (e) {
+        addMessage("upload failed — is the server running?", "system");
+      }
+      fileInput.value = "";
+    });
+
+    // Train
+    trainBtn.addEventListener("click", async () => {
+      addMessage("training...", "system");
+      try {
+        const res = await fetch(API + "/train", { method: "POST" });
+        const data = await res.json();
+        addMessage(data.message || data.error || "done", "system");
+      } catch (e) {
+        addMessage("train failed — is the server running?", "system");
+      }
+    });
+
     // Greeting
-    setTimeout(() => addMessage("yo i’m lloyd. what’s good", "lloyd"), 300);
+    setTimeout(() => addMessage("yo i’m lloyd. upload files + hit train whenever u want", "lloyd"), 300);
   </script>
 </body>
 </html>
