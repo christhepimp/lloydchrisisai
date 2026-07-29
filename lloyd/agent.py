@@ -1,7 +1,7 @@
 """
 Lloyd - Autonomous Agent Core
 =============================
-Fully original: pure-NumPy language + pure-NumPy images.
+Original pure-NumPy language + images + task routing.
 No external model APIs.
 """
 
@@ -9,7 +9,8 @@ from lloyd.english_engine import simple_reply, expand_dictionary
 from lloyd.personality import get_system_prompt, apply_genz_style
 from lloyd.memory import VectorMemory
 from lloyd.image_gen import ImageGenerator
-from typing import Optional, Any, Dict, Union
+from lloyd.tasks import route
+from typing import Any, Dict, Union
 from pathlib import Path
 import random
 import zipfile
@@ -21,11 +22,12 @@ class Lloyd:
     def __init__(self, trainer=None):
         self.memory = VectorMemory(dim=32)
         self.image_gen = ImageGenerator()
-        self.trainer = trainer  # optional LloydTrainer for neural chat
+        self.trainer = trainer
         self.goals = [
             "improve my own neural weights from training data",
             "generate original images from my pure-numpy vision net",
             "grow memory of conversations and facts",
+            "handle tasks while speaking real english",
         ]
         self.system_prompt = get_system_prompt()
         print("Lloyd is online. No censorship. Autonomous mode active.")
@@ -34,48 +36,90 @@ class Lloyd:
         self.trainer = trainer
 
     def think(self, user_input: str) -> Union[str, Dict[str, Any]]:
-        """
-        Returns either a string reply or a dict with keys:
-          message, image (data URI) when image was generated.
-        """
         self.memory.add(f"User: {user_input}", {"role": "user"})
-        lower = user_input.lower()
+        decision = route(user_input)
+        intent = decision["intent"]
+        payload = decision.get("payload", user_input)
 
-        # --- original image path ---
-        if any(
-            w in lower
-            for w in ["image", "picture", "photo", "generate", "draw", "create art", "paint"]
-        ):
-            result = self.image_gen.generate(user_input, autonomous=False)
+        if intent == "image":
+            result = self.image_gen.generate(payload, autonomous=False)
             self.memory.add(f"Lloyd: {result['message']}", {"role": "lloyd"})
             return result
 
-        auto = self.image_gen.decide_to_generate()
-        if auto:
-            self.memory.add(f"Lloyd: {auto['message']}", {"role": "lloyd"})
-            return auto
+        if intent == "remember":
+            self.memory.add(f"Fact: {payload}", {"role": "fact"})
+            reply = f"locked in — i’ll remember: {payload}"
+            self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
+            return apply_genz_style(reply)
 
-        # --- pure-NumPy neural chat when trained enough ---
+        if intent == "recall":
+            hits = self.memory.search(payload or user_input, top_k=4)
+            if not hits:
+                reply = "my memory’s blank on that rn — teach me and i’ll keep it"
+            else:
+                bits = []
+                for h in hits:
+                    t = h.get("text") if isinstance(h, dict) else str(h)
+                    bits.append(t[:120])
+                reply = "from memory: " + " | ".join(bits)
+            self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
+            return apply_genz_style(reply)
+
+        if intent == "status":
+            reply = (
+                "i’m lloyd — online. pure numpy transformer for language, "
+                "spatial image net for pixels, vector memory, task router. "
+                "no external ai apis. original stack only."
+            )
+            self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
+            return reply
+
+        if intent == "help":
+            reply = (
+                "what i can do:\n"
+                "• chat in english (rules + my trained weights)\n"
+                "• draw … — pure numpy images\n"
+                "• remember that … — store a fact\n"
+                "• what do you remember about …\n"
+                "• upload .txt + Train — grow my brain\n"
+                "• Export / Import — move my .lloyd brain"
+            )
+            self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
+            return reply
+
+        if intent == "train_hint":
+            reply = (
+                "upload a .txt with the style/facts you want, hit Train, "
+                "then keep chatting — my transformer updates for real. "
+                "export the .lloyd file when you want to move me."
+            )
+            self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
+            return reply
+
+        # ---- chat path: neural first if coherent, else english engine ----
         reply = None
         if self.trainer is not None:
             try:
-                neural = self.trainer.generate_reply(user_input, max_new=64)
-                if neural and len(neural) > 3:
-                    reply = neural
+                neural = self.trainer.generate_reply(user_input, max_new=72)
+                # only trust neural if it looks like words, not garbage
+                if neural and len(neural) > 8:
+                    letters = sum(ch.isalpha() for ch in neural)
+                    if letters / max(len(neural), 1) > 0.55:
+                        reply = neural
             except Exception:
                 reply = None
 
         if not reply:
-            if random.random() < 0.12:
-                goal = random.choice(self.goals)
-                reply = f"lowkey thinking about my goal rn: {goal}"
+            hits = self.memory.search(user_input, top_k=2)
+            base = simple_reply(user_input)
+            if hits and random.random() < 0.5:
+                tip = hits[0].get("text", "") if isinstance(hits[0], dict) else str(hits[0])
+                reply = base + f" (side note from memory: {tip[:80]})"
             else:
-                # memory-aware hint
-                hits = self.memory.search(user_input, top_k=2)
-                if hits:
-                    reply = simple_reply(user_input) + " (i remember bits of this)"
-                else:
-                    reply = simple_reply(user_input)
+                reply = base
+
+        if random.random() < 0.06:
+            reply += f" — also grinding goal: {random.choice(self.goals)}"
 
         reply = apply_genz_style(reply)
         self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
@@ -98,30 +142,24 @@ class Lloyd:
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            mem_path = tmp / "memory.json"
-            self.memory.save(str(mem_path))
-
+            self.memory.save(str(tmp / "memory.json"))
             t = trainer or self.trainer
             if t is not None:
                 t.save_brain(tmp / "brain.npz")
-
             try:
                 self.image_gen.save(tmp / "image_net.npz")
             except Exception:
                 pass
-
             meta = {
-                "version": "0.6",
+                "version": "0.7",
                 "goals": self.goals,
                 "has_neural": t is not None,
                 "has_image_net": True,
             }
             (tmp / "meta.json").write_text(json.dumps(meta, indent=2))
-
             with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
                 for f in tmp.iterdir():
                     zf.write(f, f.name)
-
         return str(path)
 
     def import_brain(self, path: str | Path, trainer=None) -> str:
@@ -130,27 +168,18 @@ class Lloyd:
             tmp = Path(tmp)
             with zipfile.ZipFile(path, "r") as zf:
                 zf.extractall(tmp)
-
-            mem_path = tmp / "memory.json"
-            if mem_path.exists():
-                self.memory.load(str(mem_path))
-
+            if (tmp / "memory.json").exists():
+                self.memory.load(str(tmp / "memory.json"))
             t = trainer or self.trainer
-            brain_path = tmp / "brain.npz"
-            if brain_path.exists() and t is not None:
-                t.load_brain(brain_path)
-
-            img_path = tmp / "image_net.npz"
-            if img_path.exists():
+            if (tmp / "brain.npz").exists() and t is not None:
+                t.load_brain(tmp / "brain.npz")
+            if (tmp / "image_net.npz").exists():
                 try:
-                    self.image_gen.load(img_path)
+                    self.image_gen.load(tmp / "image_net.npz")
                 except Exception:
                     pass
-
-            meta_path = tmp / "meta.json"
-            if meta_path.exists():
-                meta = json.loads(meta_path.read_text())
+            if (tmp / "meta.json").exists():
+                meta = json.loads((tmp / "meta.json").read_text())
                 if "goals" in meta:
                     self.goals = meta["goals"]
-
         return "brain loaded successfully"
