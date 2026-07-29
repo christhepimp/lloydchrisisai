@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.env
+*.egg-info/
+dist/
+build/
+uploads/
+
+# Node / Capacitor (generated)
+node_modules/
+package-lock.json
+android/
+ios/
+.capacitor/
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Local secrets / weights dumps if any
+*.pt
+*.pth
+*.onnx
+weights/

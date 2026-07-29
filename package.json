@@ -1,0 +1,20 @@
+{
+  "name": "lloyd",
+  "version": "0.5.0",
+  "description": "Lloyd — original autonomous AI agent. Same brain on GitHub, web, host, or APK.",
+  "private": true,
+  "scripts": {
+    "cap:init": "npx cap init \"Lloyd\" \"ai.lloyd.chris\" --web-dir interface/mobile_web",
+    "cap:add": "npx cap add android",
+    "cap:sync": "npx cap sync",
+    "cap:open": "npx cap open android",
+    "apk:setup": "npm install @capacitor/core @capacitor/cli @capacitor/android && cp mobile/capacitor.config.json . && npx cap add android && npx cap sync",
+    "apk:sync": "npx cap sync",
+    "apk:open": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/cli": "^6.0.0",
+    "@capacitor/core": "^6.0.0"
+  }
+}

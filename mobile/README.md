@@ -1,41 +1,47 @@
 # Building the Lloyd APK
 
-This folder contains the Capacitor config that turns the existing mobile web UI into a real Android app.
-
-The **brain stays the same** (`lloyd/` + `model/`). The APK is just a shell that talks to whatever server is running that brain.
+**Same brain.** The APK is only a shell.  
+All intelligence stays in `lloyd/` + `model/` on GitHub (and whatever server you deploy).
 
 ## Prerequisites
 
 - Node.js 18+
-- Android Studio (with Android SDK)
-- Java 17
+- Android Studio (Android SDK + Java 17)
 
-## Steps
-
-From the **repo root**:
+## One-time setup (from repo root)
 
 ```bash
-npm init -y
-npm install @capacitor/core @capacitor/cli @capacitor/android
-
-# Use the config we already committed
+npm install
 cp mobile/capacitor.config.json .
-
-npx cap init "Lloyd" "ai.lloyd.chris" --web-dir interface/mobile_web
 npx cap add android
 npx cap sync
-npx cap open android
 ```
 
-In Android Studio:
+Or the single script:
 
-1. Let Gradle finish syncing
-2. Build → Build Bundle(s) / APK(s) → Build APK(s)
-3. Find the APK under `android/app/build/outputs/apk/debug/`
+```bash
+npm run apk:setup
+```
 
-## Pointing the APK at a hosted Lloyd
+## Build the APK
 
-Edit `interface/mobile_web/index.html` and change:
+```bash
+npm run apk:open
+# Android Studio → Build → Build Bundle(s) / APK(s) → Build APK(s)
+# Output: android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Command-line alternative (after SDK is configured):
+
+```bash
+cd android
+./gradlew assembleDebug
+```
+
+## Point the APK at a hosted brain (when you deploy later)
+
+1. Host the full version (see `docs/DEPLOY.md` or root README).
+2. Edit `interface/mobile_web/index.html` and change:
 
 ```js
 const API = window.location.origin;
@@ -44,16 +50,16 @@ const API = window.location.origin;
 to:
 
 ```js
-const API = "https://YOUR-DEPLOYED-LLOYD-URL";
+const API = "https://YOUR-LLOYD-URL.onrender.com";  // or Railway, Fly, etc.
 ```
 
-Then:
+3. Re-sync and rebuild:
 
 ```bash
-npx cap sync
-npx cap open android
+npm run apk:sync
+npm run apk:open
 ```
 
-and rebuild.
+Same weights. Same personality. Same training. Different skin.
 
-Same brain. Same training. Same personality.
+When Lloyd is big enough you can later ship an on-device quantized brain — the UI already talks over HTTP so nothing has to be rewritten.
