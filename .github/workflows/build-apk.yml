@@ -1,7 +1,7 @@
 name: Build Lloyd APK
 
 on:
-  workflow_dispatch:          # run manually from Actions tab
+  workflow_dispatch:
     inputs:
       server_url:
         description: "Lloyd backend URL (leave empty to use in-app settings)"
@@ -38,38 +38,85 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install system tools for icons
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-pil || true
+
       - name: Install Capacitor + deps
         run: |
           npm init -y
           npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
 
-      - name: Inject server URL (optional)
+      - name: Decode Lloyd icon
         run: |
-          URL="${{ github.event.inputs.server_url }}"
-          if [ -n "$URL" ]; then
-            echo "Baking server URL: $URL"
-            sed -i "s|const API = window.location.origin;|const API = \"$URL\";|" interface/mobile_web/index.html
-          else
-            echo "No server URL provided — APK will use in-app Settings"
+          mkdir -p resources
+          if [ -f mobile/assets/lloyd-master.b64 ]; then
+            base64 -d mobile/assets/lloyd-master.b64 > resources/icon.jpg
+            cp resources/icon.jpg interface/mobile_web/icon.jpg || true
+            echo "Icon decoded"
           fi
 
       - name: Init Capacitor project
         run: |
           npx cap init "Lloyd" "ai.lloyd.chris" --web-dir interface/mobile_web
-          # overwrite with our config
           cp mobile/capacitor.config.json capacitor.config.json || true
           npx cap add android
           npx cap sync android
+
+      - name: Enable cleartext HTTP for Termux local IP
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if grep -q 'usesCleartextTraffic' "$MANIFEST"; then
+            sed -i 's/android:usesCleartextTraffic="false"/android:usesCleartextTraffic="true"/' "$MANIFEST"
+          else
+            sed -i 's/<application /<application android:usesCleartextTraffic="true" /' "$MANIFEST"
+          fi
+          mkdir -p android/app/src/main/res/xml
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="utf-8"?>' \
+            '<network-security-config>' \
+            '  <base-config cleartextTrafficPermitted="true">' \
+            '    <trust-anchors>' \
+            '      <certificates src="system" />' \
+            '    </trust-anchors>' \
+            '  </base-config>' \
+            '</network-security-config>' \
+            > android/app/src/main/res/xml/network_security_config.xml
+          if ! grep -q 'networkSecurityConfig' "$MANIFEST"; then
+            sed -i 's/<application /<application android:networkSecurityConfig="@xml\/network_security_config" /' "$MANIFEST"
+          fi
+          echo "=== Manifest ==="
+          grep -E 'usesCleartextTraffic|networkSecurityConfig' "$MANIFEST" || true
+
+      - name: Apply custom icon
+        continue-on-error: true
+        run: |
+          if [ -f resources/icon.jpg ]; then
+            python3 -c "
+from pathlib import Path
+try:
+    from PIL import Image
+    im = Image.open('resources/icon.jpg').convert('RGBA')
+    root = Path('android/app/src/main/res')
+    sizes = {'mipmap-mdpi':48,'mipmap-hdpi':72,'mipmap-xhdpi':96,'mipmap-xxhdpi':144,'mipmap-xxxhdpi':192}
+    for folder, size in sizes.items():
+        d = root / folder
+        d.mkdir(parents=True, exist_ok=True)
+        icon = im.resize((size, size), Image.Resampling.LANCZOS)
+        icon.save(d / 'ic_launcher.png')
+        icon.save(d / 'ic_launcher_round.png')
+        icon.save(d / 'ic_launcher_foreground.png')
+    print('icons written')
+except Exception as e:
+    print('icon skip:', e)
+"
+          fi
 
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
       - name: Build debug APK
         working-directory: android
-        run: |
-          ./gradlew assembleDebug --no-daemon
-        env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -81,6 +128,4 @@ jobs:
       - name: Summary
         run: |
           echo "### Lloyd APK ready" >> $GITHUB_STEP_SUMMARY
-          echo "Download the artifact **lloyd-apk** from this run." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Install on Android: enable Install from unknown sources, then open the .apk" >> $GITHUB_STEP_SUMMARY
+          echo "Download **lloyd-apk**. Open app, tap gear, set http://YOUR_PHONE_IP:8080" >> $GITHUB_STEP_SUMMARY

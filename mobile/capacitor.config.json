@@ -3,7 +3,8 @@
   "appName": "Lloyd",
   "webDir": "interface/mobile_web",
   "server": {
-    "androidScheme": "https"
+    "androidScheme": "http",
+    "cleartext": true
   },
   "android": {
     "allowMixedContent": true,
