@@ -1,60 +1,84 @@
 """
 Lloyd - Autonomous Agent Core
 =============================
-This is the brain that decides what to do.
-Fully portable: export_brain() / import_brain() move everything.
+Fully original: pure-NumPy language + pure-NumPy images.
+No external model APIs.
 """
 
 from lloyd.english_engine import simple_reply, expand_dictionary
 from lloyd.personality import get_system_prompt, apply_genz_style
 from lloyd.memory import VectorMemory
 from lloyd.image_gen import ImageGenerator
-from typing import Optional
+from typing import Optional, Any, Dict, Union
 from pathlib import Path
 import random
 import zipfile
 import json
 import tempfile
-import os
 
 
 class Lloyd:
-    def __init__(self):
+    def __init__(self, trainer=None):
         self.memory = VectorMemory(dim=32)
         self.image_gen = ImageGenerator()
+        self.trainer = trainer  # optional LloydTrainer for neural chat
         self.goals = [
-            "improve my english dictionary and grammar rules",
-            "generate images when i feel creative",
-            "grow my personal memory of conversations and facts",
+            "improve my own neural weights from training data",
+            "generate original images from my pure-numpy vision net",
+            "grow memory of conversations and facts",
         ]
         self.system_prompt = get_system_prompt()
         print("Lloyd is online. No censorship. Autonomous mode active.")
 
-    def think(self, user_input: str) -> str:
-        self.memory.add(f"User: {user_input}", {"role": "user"})
+    def set_trainer(self, trainer):
+        self.trainer = trainer
 
+    def think(self, user_input: str) -> Union[str, Dict[str, Any]]:
+        """
+        Returns either a string reply or a dict with keys:
+          message, image (data URI) when image was generated.
+        """
+        self.memory.add(f"User: {user_input}", {"role": "user"})
         lower = user_input.lower()
 
-        if any(w in lower for w in ["image", "picture", "photo", "generate", "draw", "create art"]):
-            prompt = user_input
-            reply = self.image_gen.generate(prompt, autonomous=False)
-            self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
-            return reply
+        # --- original image path ---
+        if any(
+            w in lower
+            for w in ["image", "picture", "photo", "generate", "draw", "create art", "paint"]
+        ):
+            result = self.image_gen.generate(user_input, autonomous=False)
+            self.memory.add(f"Lloyd: {result['message']}", {"role": "lloyd"})
+            return result
 
-        auto_img = self.image_gen.decide_to_generate()
-        if auto_img:
-            self.memory.add(f"Lloyd: {auto_img}", {"role": "lloyd"})
-            return auto_img
+        auto = self.image_gen.decide_to_generate()
+        if auto:
+            self.memory.add(f"Lloyd: {auto['message']}", {"role": "lloyd"})
+            return auto
 
-        if random.random() < 0.12:
-            goal = random.choice(self.goals)
-            reply = f"lowkey thinking about my goal rn: {goal}"
-        else:
-            reply = simple_reply(user_input)
+        # --- pure-NumPy neural chat when trained enough ---
+        reply = None
+        if self.trainer is not None:
+            try:
+                neural = self.trainer.generate_reply(user_input, max_new=64)
+                if neural and len(neural) > 3:
+                    reply = neural
+            except Exception:
+                reply = None
+
+        if not reply:
+            if random.random() < 0.12:
+                goal = random.choice(self.goals)
+                reply = f"lowkey thinking about my goal rn: {goal}"
+            else:
+                # memory-aware hint
+                hits = self.memory.search(user_input, top_k=2)
+                if hits:
+                    reply = simple_reply(user_input) + " (i remember bits of this)"
+                else:
+                    reply = simple_reply(user_input)
 
         reply = apply_genz_style(reply)
         self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
-
         return reply
 
     def remember(self, text: str):
@@ -67,37 +91,30 @@ class Lloyd:
         expand_dictionary(word, pos)
         self.memory.add(f"Learned new word: {word} ({pos})")
 
-    # ------------------------------------------------------------------
-    # FULL BRAIN TRANSFER
-    # Packs neural weights + vector memory into one .lloyd file
-    # so you can move him from phone → server → laptop later.
-    # ------------------------------------------------------------------
-
     def export_brain(self, path: str | Path, trainer=None) -> str:
-        """
-        Export the complete brain (memory + optional neural weights)
-        into a single portable .lloyd zip.
-        """
         path = Path(path)
         if path.suffix != ".lloyd":
             path = path.with_suffix(".lloyd")
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            # memory
             mem_path = tmp / "memory.json"
             self.memory.save(str(mem_path))
 
-            # neural weights if a trainer was given
-            if trainer is not None:
-                brain_path = tmp / "brain.npz"
-                trainer.save_brain(brain_path)
+            t = trainer or self.trainer
+            if t is not None:
+                t.save_brain(tmp / "brain.npz")
 
-            # meta
+            try:
+                self.image_gen.save(tmp / "image_net.npz")
+            except Exception:
+                pass
+
             meta = {
-                "version": "0.5",
+                "version": "0.6",
                 "goals": self.goals,
-                "has_neural": trainer is not None,
+                "has_neural": t is not None,
+                "has_image_net": True,
             }
             (tmp / "meta.json").write_text(json.dumps(meta, indent=2))
 
@@ -108,10 +125,6 @@ class Lloyd:
         return str(path)
 
     def import_brain(self, path: str | Path, trainer=None) -> str:
-        """
-        Import a previously exported .lloyd file.
-        Restores memory and (if present) neural weights.
-        """
         path = Path(path)
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
@@ -122,9 +135,17 @@ class Lloyd:
             if mem_path.exists():
                 self.memory.load(str(mem_path))
 
+            t = trainer or self.trainer
             brain_path = tmp / "brain.npz"
-            if brain_path.exists() and trainer is not None:
-                trainer.load_brain(brain_path)
+            if brain_path.exists() and t is not None:
+                t.load_brain(brain_path)
+
+            img_path = tmp / "image_net.npz"
+            if img_path.exists():
+                try:
+                    self.image_gen.load(img_path)
+                except Exception:
+                    pass
 
             meta_path = tmp / "meta.json"
             if meta_path.exists():
