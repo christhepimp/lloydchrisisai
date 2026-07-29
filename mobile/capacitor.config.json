@@ -1,0 +1,11 @@
+{
+  "appId": "ai.lloyd.chris",
+  "appName": "Lloyd",
+  "webDir": "interface/mobile_web",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}
