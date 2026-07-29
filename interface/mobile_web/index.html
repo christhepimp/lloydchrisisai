@@ -1,1 +1,217 @@
-<PLACEHOLDER>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Lloyd</title>
+  <style>
+    :root { --bg:#0a0a12; --card:#1a1a1a; --accent:#00ff9d; --text:#f0f0f0; --muted:#888; }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); height:100dvh; display:flex; flex-direction:column; overflow:hidden; }
+    #intro { position:fixed; inset:0; z-index:9999; background:radial-gradient(ellipse at 50% 40%,#1a1040 0%,#05050a 70%); display:flex; flex-direction:column; align-items:center; justify-content:center; transition:opacity .7s,visibility .7s; }
+    #intro.hide { opacity:0; visibility:hidden; pointer-events:none; }
+    .glow { position:absolute; width:260px; height:260px; border-radius:50%; background:radial-gradient(circle,rgba(0,255,157,.3),transparent 70%); animation:pg 2.4s ease-in-out infinite; }
+    @keyframes pg { 0%,100%{transform:scale(1);opacity:.6} 50%{transform:scale(1.3);opacity:1} }
+    .bot { width:180px; height:180px; border-radius:40%; background:linear-gradient(145deg,#1e1e2e,#0d0d18); border:3px solid #00ff9d55; box-shadow:0 0 40px #00ff9d55,0 0 80px #7c3aed44; display:flex; flex-direction:column; align-items:center; justify-content:center; position:relative; z-index:1; animation:float 3s ease-in-out infinite; }
+    @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-14px)} }
+    .eyes { display:flex; gap:28px; margin-bottom:8px; }
+    .eye { width:36px; height:18px; border-radius:0 0 18px 18px; background:#00ff9d; box-shadow:0 0 12px #00ff9d; animation:blink 3.5s infinite; }
+    @keyframes blink { 0%,40%,60%,100%{transform:scaleY(1)} 50%{transform:scaleY(.1)} }
+    .beanie { position:absolute; top:-18px; width:120px; height:40px; background:#111; border-radius:20px 20px 4px 4px; border:2px solid #333; display:flex; align-items:center; justify-content:center; font-size:10px; letter-spacing:2px; color:#aaa; font-weight:700; }
+    .intro-title { margin-top:28px; font-size:2.2rem; font-weight:800; letter-spacing:4px; background:linear-gradient(90deg,#00ff9d,#a78bfa,#00ff9d); background-size:200% auto; -webkit-background-clip:text; background-clip:text; color:transparent; animation:sh 3s linear infinite; z-index:1; }
+    @keyframes sh { to { background-position:200% center; } }
+    .intro-sub { margin-top:8px; color:#9ca3af; font-size:.85rem; letter-spacing:2px; z-index:1; }
+    .bar { margin-top:24px; width:160px; height:4px; background:#222; border-radius:4px; overflow:hidden; z-index:1; }
+    .bar>div { height:100%; width:0; background:linear-gradient(90deg,#00ff9d,#7c3aed); animation:lb 2.2s ease-out forwards; }
+    @keyframes lb { to { width:100%; } }
+    .skip { margin-top:20px; background:transparent; border:1px solid #444; color:#aaa; padding:8px 18px; border-radius:20px; font-size:.8rem; cursor:pointer; z-index:1; }
+    header { padding:14px 16px; background:var(--card); border-bottom:1px solid #333; display:flex; justify-content:space-between; align-items:center; }
+    header .title { font-weight:700; font-size:1.25rem; letter-spacing:1px; }
+    header .title span { color:var(--accent); }
+    .actions { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+    .actions button { background:#222; border:1px solid #444; color:var(--text); border-radius:8px; padding:6px 10px; font-size:.75rem; cursor:pointer; }
+    #chat { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; }
+    .msg { max-width:85%; padding:12px 16px; border-radius:18px; line-height:1.4; font-size:.95rem; white-space:pre-wrap; }
+    .user { align-self:flex-end; background:#2a2a2a; border-bottom-right-radius:4px; }
+    .lloyd { align-self:flex-start; background:#132a22; border:1px solid #00ff9d33; border-bottom-left-radius:4px; }
+    .lloyd::before { content:"Lloyd"; display:block; font-size:.7rem; color:var(--accent); margin-bottom:4px; font-weight:600; }
+    .system { align-self:center; background:#222; color:var(--muted); font-size:.8rem; border-radius:12px; padding:8px 14px; }
+    footer { padding:12px; background:var(--card); border-top:1px solid #333; display:flex; gap:8px; align-items:center; }
+    #input { flex:1; background:#222; border:1px solid #444; border-radius:24px; padding:12px 18px; color:white; font-size:1rem; outline:none; }
+    #input:focus { border-color:var(--accent); }
+    #send { background:var(--accent); color:#000; border:none; border-radius:50%; width:48px; height:48px; font-size:1.2rem; font-weight:bold; cursor:pointer; flex-shrink:0; }
+    #fileInput,#brainInput { display:none; }
+    #settings { display:none; position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:100; padding:24px; flex-direction:column; justify-content:center; }
+    #settings.open { display:flex; }
+    #settings .box { background:var(--card); border-radius:16px; padding:20px; border:1px solid #333; max-height:90vh; overflow-y:auto; }
+    #settings h2 { margin-bottom:8px; font-size:1.1rem; }
+    #settings p { color:var(--muted); font-size:.8rem; margin-bottom:10px; line-height:1.4; }
+    #settings input { width:100%; background:#222; border:1px solid #444; border-radius:10px; padding:12px; color:white; font-size:.95rem; margin-bottom:10px; }
+    #settings .row { display:flex; gap:8px; margin-top:4px; }
+    #settings .row button { flex:1; padding:12px; border-radius:10px; border:none; font-weight:600; cursor:pointer; }
+    #saveUrl { background:var(--accent); color:#000; }
+    #testUrl,#closeSettings { background:#333; color:white; }
+    .hint { background:#1a2030; border:1px solid #334; border-radius:10px; padding:10px 12px; font-size:.75rem; color:#9ab; margin-bottom:12px; line-height:1.45; }
+    .hint code { color:var(--accent); font-size:.72rem; word-break:break-all; }
+  </style>
+</head>
+<body>
+  <div id="intro">
+    <div class="glow"></div>
+    <div class="bot"><div class="beanie">LLOYD</div><div class="eyes"><div class="eye"></div><div class="eye"></div></div></div>
+    <div class="intro-title">LLOYD</div>
+    <div class="intro-sub">YOUR AI. YOUR VIBE.</div>
+    <div class="bar"><div></div></div>
+    <button class="skip" id="skipIntro">tap to enter</button>
+  </div>
+  <header>
+    <div class="title">L<span>oyd</span></div>
+    <div class="actions">
+      <button id="uploadBtn">Upload</button>
+      <button id="trainBtn">Train</button>
+      <button id="exportBtn">Export</button>
+      <button id="importBtn">Import</button>
+      <button id="settingsBtn">Settings</button>
+    </div>
+  </header>
+  <div id="chat"></div>
+  <footer>
+    <input id="input" type="text" placeholder="say something..." autocomplete="off" />
+    <button id="send">Go</button>
+  </footer>
+  <input type="file" id="fileInput" accept=".txt,text/plain" />
+  <input type="file" id="brainInput" accept=".lloyd,application/octet-stream" />
+  <div id="settings">
+    <div class="box">
+      <h2>Lloyd server</h2>
+      <div class="hint">
+        <b>Important:</b> APK and Termux are different apps.
+        <code>127.0.0.1</code> will NOT work.<br><br>
+        In Termux run <code>ifconfig</code> and use your phone IP, e.g.<br>
+        <code>http://10.11.205.156:8080</code><br><br>
+        Keep <code>python server.py</code> running in Termux.<br>
+        Rebuild APK from GitHub Actions for cleartext HTTP fix.
+      </div>
+      <p>Paste full URL (include http:// and port):</p>
+      <input id="serverUrl" type="text" placeholder="http://10.11.205.156:8080" inputmode="url" />
+      <div class="row">
+        <button id="testUrl">Test</button>
+        <button id="saveUrl">Save</button>
+        <button id="closeSettings">Close</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    function dismissIntro(){ document.getElementById("intro").classList.add("hide"); }
+    document.getElementById("skipIntro").addEventListener("click", dismissIntro);
+    setTimeout(dismissIntro, 2800);
+
+    function normalizeAPI(url){
+      let u=(url||"").trim().replace(/\/$/,"");
+      if(!u) return "";
+      if(!/^https?:\/\//i.test(u)) u="http://"+u;
+      return u;
+    }
+    function getAPI(){
+      const saved=localStorage.getItem("lloyd_server_url");
+      if(saved&&saved.trim()) return normalizeAPI(saved);
+      if(location.protocol==="https:"||location.protocol==="capacitor:"||location.protocol==="file:") return "";
+      return location.origin;
+    }
+    let API=getAPI();
+    const chat=document.getElementById("chat");
+    const input=document.getElementById("input");
+    function addMessage(text,who){
+      const d=document.createElement("div");
+      d.className="msg "+who;
+      d.textContent=text;
+      chat.appendChild(d);
+      chat.scrollTop=chat.scrollHeight;
+    }
+    async function send(){
+      const text=input.value.trim();
+      if(!text) return;
+      if(!API){ addMessage("no server — open Settings and set http://YOUR_PHONE_IP:8080 (not 127.0.0.1)","system"); return; }
+      addMessage(text,"user");
+      input.value="";
+      try{
+        const res=await fetch(API+"/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:text})});
+        if(!res.ok) throw new Error("HTTP "+res.status);
+        const data=await res.json();
+        addMessage(data.reply||"...","lloyd");
+      }catch(e){
+        addMessage("can't reach "+API+" — keep Termux server.py running. Use WiFi IP from ifconfig. Error: "+e.message,"system");
+      }
+    }
+    document.getElementById("send").addEventListener("click",send);
+    input.addEventListener("keydown",e=>{ if(e.key==="Enter") send(); });
+
+    document.getElementById("uploadBtn").addEventListener("click",()=>document.getElementById("fileInput").click());
+    document.getElementById("fileInput").addEventListener("change",async()=>{
+      const file=document.getElementById("fileInput").files[0];
+      if(!file||!API) return;
+      const form=new FormData(); form.append("file",file);
+      addMessage("uploading "+file.name+"...","system");
+      try{ const res=await fetch(API+"/upload",{method:"POST",body:form}); const data=await res.json(); addMessage(data.message||data.error||"ok","system"); }
+      catch(e){ addMessage("upload failed: "+e.message,"system"); }
+    });
+    document.getElementById("trainBtn").addEventListener("click",async()=>{
+      if(!API) return;
+      addMessage("training...","system");
+      try{ const res=await fetch(API+"/train",{method:"POST"}); const data=await res.json(); addMessage(data.message||data.error||"done","system"); }
+      catch(e){ addMessage("train failed: "+e.message,"system"); }
+    });
+    document.getElementById("exportBtn").addEventListener("click",async()=>{
+      if(!API) return;
+      addMessage("exporting...","system");
+      try{
+        const res=await fetch(API+"/export");
+        if(!res.ok) throw new Error("fail");
+        const blob=await res.blob();
+        const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="lloyd_brain.lloyd"; a.click();
+        addMessage("brain exported","system");
+      }catch(e){ addMessage("export failed","system"); }
+    });
+    document.getElementById("importBtn").addEventListener("click",()=>document.getElementById("brainInput").click());
+    document.getElementById("brainInput").addEventListener("change",async()=>{
+      const file=document.getElementById("brainInput").files[0];
+      if(!file||!API) return;
+      addMessage("importing...","system");
+      try{ const res=await fetch(API+"/import",{method:"POST",body:file,headers:{"Content-Type":"application/octet-stream"}}); const data=await res.json(); addMessage(data.message||"imported","system"); }
+      catch(e){ addMessage("import failed","system"); }
+    });
+
+    const settings=document.getElementById("settings");
+    const serverUrlInput=document.getElementById("serverUrl");
+    document.getElementById("settingsBtn").addEventListener("click",()=>{
+      serverUrlInput.value=localStorage.getItem("lloyd_server_url")||"";
+      settings.classList.add("open");
+    });
+    document.getElementById("closeSettings").addEventListener("click",()=>settings.classList.remove("open"));
+    document.getElementById("saveUrl").addEventListener("click",()=>{
+      const v=normalizeAPI(serverUrlInput.value);
+      if(v) localStorage.setItem("lloyd_server_url",v); else localStorage.removeItem("lloyd_server_url");
+      API=getAPI();
+      settings.classList.remove("open");
+      addMessage(API?("server set to: "+API):"server cleared","system");
+    });
+    document.getElementById("testUrl").addEventListener("click",async()=>{
+      const v=normalizeAPI(serverUrlInput.value);
+      if(!v){ addMessage("type a URL first","system"); return; }
+      addMessage("testing "+v+" ...","system");
+      try{
+        const res=await fetch(v+"/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:"ping"})});
+        const data=await res.json();
+        addMessage("connected - Lloyd says: "+(data.reply||"ok"),"system");
+        localStorage.setItem("lloyd_server_url",v); API=v;
+      }catch(e){
+        addMessage("test failed: "+e.message+" — use WiFi IP from ifconfig, keep server.py running, rebuild APK for cleartext","system");
+      }
+    });
+    setTimeout(()=>{
+      if(!API) addMessage("yo im lloyd. open Settings and set http://YOUR_PHONE_IP:8080 from Termux ifconfig — not 127.0.0.1","lloyd");
+      else addMessage("yo im lloyd. server: "+API,"lloyd");
+    }, 2900);
+  </script>
+</body>
+</html>
