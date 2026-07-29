@@ -12,6 +12,7 @@
 - Chat + image generation  
 - Mobile interface with **file upload + real neural training**  
 - **Fully portable brain** — train anywhere, move him later  
+- **APK with no Android Studio** — built in the cloud by GitHub Actions  
 
 ## One Brain, Everywhere
 
@@ -23,7 +24,7 @@ model/          ← pure-NumPy Tiny Transformer (the actual neural net)
 ```
 
 This is the **single source of truth**.  
-Web, hosted server, and on-device APK all run the exact same code.
+Web, hosted server, and APK all use the exact same brain.
 
 The brain is serializable:
 
@@ -31,22 +32,20 @@ The brain is serializable:
 - `lloyd.export_brain("lloyd_brain.lloyd", trainer=trainer)` → one file with weights + memory
 - UI has **Export** / **Import** buttons
 
-Train him on your phone → export the `.lloyd` file → import on a server (or the other way around). Same weights, same memories.
+Train him → export the `.lloyd` file → import on any other Lloyd instance. Same weights, same memories.
 
 ---
 
-## Current Status (v0.5)
+## Get the APK (no Android Studio)
 
-- Pure NumPy Tiny Transformer with real learning  
-- Upload `.txt` → Train → weights actually update  
-- Auto-saves brain after every training run  
-- Export / Import full brain as a single `.lloyd` file  
-- Expanded English dictionary + Gen-Z slang  
-- Autonomous agent with goals  
-- Image generation placeholder  
-- Vector memory  
-- Local server + deployable Flask/WSGI version  
-- Mobile web UI ready for on-device APK packaging  
+1. Open **Actions** on this repo  
+2. Choose **Build Lloyd APK** → **Run workflow**  
+3. Wait for the green check → download the **lloyd-apk** artifact  
+4. Install `app-debug.apk` on your phone (allow unknown sources)  
+
+Full steps: **[`docs/GET_THE_APK.md`](docs/GET_THE_APK.md)**
+
+In the app, tap **⚙** and paste the URL of your hosted Lloyd (Render / Railway / etc.) so chat + train + export all work from the phone.
 
 ---
 
@@ -66,7 +65,7 @@ Open **http://localhost:8080**
 
 ---
 
-## 2. Host the full version anywhere
+## 2. Host the full version anywhere (for the APK to talk to)
 
 | Platform          | How                                      |
 |-------------------|------------------------------------------|
@@ -81,15 +80,9 @@ See `docs/BRAIN_TRANSFER.md` and `docs/DEPLOY.md`.
 
 ---
 
-## 3. Full Lloyd inside an APK (train on the phone)
+## 3. True offline on-device brain (later)
 
-The Python brain is ready to run on-device.  
-See **`docs/ON_DEVICE_APK.md`** for the two practical routes:
-
-- **Chaquopy** — embed the existing Python code + WebView UI, local server on `127.0.0.1`
-- **BeeWare / Briefcase** — pure Python APK
-
-Either way you get real on-device training, and the **Export** button still gives you a `.lloyd` file you can move to a server later.
+When you want training to run *inside* the phone with no server, see **`docs/ON_DEVICE_APK.md`** (Chaquopy / BeeWare). The portable `.lloyd` format already works for moving that brain anywhere.
 
 ---
 
@@ -103,15 +96,14 @@ lloydchrisisai/
 ├── lloyd/                    ← THE BRAIN
 │   ├── agent.py              ← export_brain / import_brain
 │   ├── trainer.py            ← save_brain / load_brain
-│   ├── english_engine.py
-│   ├── memory.py
-│   ├── personality.py
-│   └── image_gen.py
+│   └── ...
 ├── model/
 │   └── tiny_transformer.py   ← pure NumPy + save/load
-├── interface/mobile_web/     ← UI (chat, train, export, import)
-├── brains/                   ← auto-saved weights + memory (created at runtime)
+├── interface/mobile_web/     ← UI (chat, train, export, import, ⚙)
+├── .github/workflows/
+│   └── build-apk.yml         ← cloud APK build (no Android Studio)
 ├── docs/
+│   ├── GET_THE_APK.md
 │   ├── BRAIN_TRANSFER.md
 │   ├── ON_DEVICE_APK.md
 │   └── DEPLOY.md
