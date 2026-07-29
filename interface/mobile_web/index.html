@@ -32,14 +32,14 @@
     }
     header .title { font-weight: 700; font-size: 1.25rem; letter-spacing: 1px; }
     header .title span { color: var(--accent); }
-    .actions { display: flex; gap: 8px; }
+    .actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
     .actions button {
       background: #222;
       border: 1px solid #444;
       color: var(--text);
       border-radius: 8px;
       padding: 6px 10px;
-      font-size: 0.8rem;
+      font-size: 0.75rem;
       cursor: pointer;
     }
     .actions button:active { background: #333; }
@@ -117,7 +117,7 @@
       cursor: pointer;
       flex-shrink: 0;
     }
-    #fileInput { display: none; }
+    #fileInput, #brainInput { display: none; }
   </style>
 </head>
 <body>
@@ -126,6 +126,8 @@
     <div class="actions">
       <button id="uploadBtn">Upload</button>
       <button id="trainBtn">Train</button>
+      <button id="exportBtn">Export</button>
+      <button id="importBtn">Import</button>
     </div>
   </header>
 
@@ -137,24 +139,22 @@
   </footer>
 
   <input type="file" id="fileInput" accept=".txt,text/plain" />
+  <input type="file" id="brainInput" accept=".lloyd,application/octet-stream" />
 
   <script>
-    // ============================================================
-    // SAME BRAIN EVERYWHERE
-    //
-    // When served by server.py / flask_app.py this is correct:
+    // Same origin when served by server.py / flask / APK local server.
+    // For remote-only APK later you can hardcode a URL here.
     const API = window.location.origin;
-    //
-    // When packaging as APK that talks to a hosted backend, change to:
-    // const API = "https://your-lloyd-server.onrender.com";
-    // ============================================================
 
     const chat = document.getElementById("chat");
     const input = document.getElementById("input");
     const sendBtn = document.getElementById("send");
     const uploadBtn = document.getElementById("uploadBtn");
     const trainBtn = document.getElementById("trainBtn");
+    const exportBtn = document.getElementById("exportBtn");
+    const importBtn = document.getElementById("importBtn");
     const fileInput = document.getElementById("fileInput");
+    const brainInput = document.getElementById("brainInput");
 
     function addMessage(text, who) {
       const div = document.createElement("div");
@@ -179,7 +179,7 @@
         const data = await res.json();
         addMessage(data.reply || "...", "lloyd");
       } catch (e) {
-        addMessage("(server not running — open via python server.py or set API url)", "system");
+        addMessage("(server not running)", "system");
       }
     }
 
@@ -188,31 +188,23 @@
       if (e.key === "Enter") send();
     });
 
-    // Upload
     uploadBtn.addEventListener("click", () => fileInput.click());
     fileInput.addEventListener("change", async () => {
       const file = fileInput.files[0];
       if (!file) return;
-
       const form = new FormData();
       form.append("file", file);
-
       addMessage("uploading " + file.name + "...", "system");
-
       try {
-        const res = await fetch(API + "/upload", {
-          method: "POST",
-          body: form
-        });
+        const res = await fetch(API + "/upload", { method: "POST", body: form });
         const data = await res.json();
         addMessage(data.message || data.error || "uploaded", "system");
       } catch (e) {
-        addMessage("upload failed — is the server running?", "system");
+        addMessage("upload failed", "system");
       }
       fileInput.value = "";
     });
 
-    // Train
     trainBtn.addEventListener("click", async () => {
       addMessage("training...", "system");
       try {
@@ -220,12 +212,50 @@
         const data = await res.json();
         addMessage(data.message || data.error || "done", "system");
       } catch (e) {
-        addMessage("train failed — is the server running?", "system");
+        addMessage("train failed", "system");
       }
     });
 
-    // Greeting
-    setTimeout(() => addMessage("yo i’m lloyd. upload files + hit train whenever u want", "lloyd"), 300);
+    // EXPORT brain → download .lloyd file (works on phone + desktop)
+    exportBtn.addEventListener("click", async () => {
+      addMessage("exporting brain...", "system");
+      try {
+        const res = await fetch(API + "/export");
+        if (!res.ok) throw new Error("export failed");
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "lloyd_brain.lloyd";
+        a.click();
+        URL.revokeObjectURL(url);
+        addMessage("brain exported as lloyd_brain.lloyd — you can move him anywhere", "system");
+      } catch (e) {
+        addMessage("export failed", "system");
+      }
+    });
+
+    // IMPORT brain from a .lloyd file
+    importBtn.addEventListener("click", () => brainInput.click());
+    brainInput.addEventListener("change", async () => {
+      const file = brainInput.files[0];
+      if (!file) return;
+      addMessage("importing brain...", "system");
+      try {
+        const res = await fetch(API + "/import", {
+          method: "POST",
+          body: file,
+          headers: { "Content-Type": "application/octet-stream" }
+        });
+        const data = await res.json();
+        addMessage(data.message || data.error || "imported", "system");
+      } catch (e) {
+        addMessage("import failed", "system");
+      }
+      brainInput.value = "";
+    });
+
+    setTimeout(() => addMessage("yo i’m lloyd. upload + train me, then export my brain whenever u want to move me", "lloyd"), 300);
   </script>
 </body>
 </html>

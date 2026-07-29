@@ -2,14 +2,15 @@
 Lloyd Flask App
 ===============
 Works on PythonAnywhere (and any WSGI host).
-Uses the exact same Lloyd agent + trainer as the original server.py
-so both versions stay in sync.
+Same brain as server.py and the future APK.
+Export / import so you can move him later.
 """
 
-from flask import Flask, request, jsonify, send_from_directory, render_template_string
+from flask import Flask, request, jsonify, send_from_directory, send_file
 from pathlib import Path
 import sys
 import os
+import tempfile
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -22,9 +23,23 @@ trainer = LloydTrainer()
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
-
-# Serve the same mobile UI
+BRAIN_DIR = Path("brains")
+BRAIN_DIR.mkdir(exist_ok=True)
 UI_DIR = Path(__file__).parent / "interface" / "mobile_web"
+
+# restore previous brain on startup
+_latest = BRAIN_DIR / "latest_brain.npz"
+if _latest.exists():
+    try:
+        trainer.load_brain(_latest)
+    except Exception:
+        pass
+_mem = BRAIN_DIR / "latest_memory.json"
+if _mem.exists():
+    try:
+        lloyd.memory.load(str(_mem))
+    except Exception:
+        pass
 
 
 @app.route("/")
@@ -87,9 +102,41 @@ def train():
             text = f.read_text(encoding="utf-8", errors="ignore")[:300]
             lloyd.remember(f"Trained on {f.name}: {text}")
 
+        trainer.save_brain(BRAIN_DIR / "latest_brain.npz")
+        lloyd.memory.save(str(BRAIN_DIR / "latest_memory.json"))
+
         return jsonify({
             "message": result["message"] + " " + " | ".join(result.get("reports", [])[:3])
         })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/export", methods=["GET"])
+def export_brain():
+    try:
+        out = BRAIN_DIR / "lloyd_export.lloyd"
+        lloyd.export_brain(out, trainer=trainer)
+        return send_file(out, as_attachment=True, download_name="lloyd_brain.lloyd")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/import", methods=["POST"])
+def import_brain():
+    try:
+        if "file" in request.files:
+            f = request.files["file"]
+            with tempfile.NamedTemporaryFile(suffix=".lloyd", delete=False) as tmp:
+                f.save(tmp.name)
+                msg = lloyd.import_brain(tmp.name, trainer=trainer)
+                os.unlink(tmp.name)
+        else:
+            with tempfile.NamedTemporaryFile(suffix=".lloyd", delete=False) as tmp:
+                tmp.write(request.get_data())
+                msg = lloyd.import_brain(tmp.name, trainer=trainer)
+                os.unlink(tmp.name)
+        return jsonify({"message": msg})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

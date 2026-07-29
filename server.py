@@ -2,6 +2,7 @@
 Lloyd Local + Deployable Server
 ===============================
 Works on localhost and on cloud hosts (Render, Railway, etc.)
+Same brain as the APK. Export/import lets you move him later.
 """
 
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -9,6 +10,7 @@ import json
 from pathlib import Path
 import sys
 import os
+import tempfile
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -20,6 +22,8 @@ trainer = LloydTrainer()
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
+BRAIN_DIR = Path("brains")
+BRAIN_DIR.mkdir(exist_ok=True)
 
 
 class LloydHandler(SimpleHTTPRequestHandler):
@@ -29,6 +33,24 @@ class LloydHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/" or self.path == "/index.html":
             self.path = "/index.html"
+            return super().do_GET()
+
+        if self.path == "/export":
+            try:
+                out = BRAIN_DIR / "lloyd_export.lloyd"
+                lloyd.export_brain(out, trainer=trainer)
+                data = out.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Disposition", "attachment; filename=lloyd_brain.lloyd")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(data)
+            except Exception as e:
+                self._json_response({"error": str(e)}, status=500)
+            return
+
         return super().do_GET()
 
     def do_POST(self):
@@ -86,9 +108,25 @@ class LloydHandler(SimpleHTTPRequestHandler):
                     text = f.read_text(encoding="utf-8", errors="ignore")[:300]
                     lloyd.remember(f"Trained on {f.name}: {text}")
 
+                # auto-save brain after training so progress is never lost
+                trainer.save_brain(BRAIN_DIR / "latest_brain.npz")
+                lloyd.memory.save(str(BRAIN_DIR / "latest_memory.json"))
+
                 self._json_response({
                     "message": result["message"] + " " + " | ".join(result.get("reports", [])[:3])
                 })
+            except Exception as e:
+                self._json_response({"error": str(e)}, status=500)
+
+        elif self.path == "/import":
+            try:
+                # raw body is the .lloyd file
+                with tempfile.NamedTemporaryFile(suffix=".lloyd", delete=False) as tmp:
+                    tmp.write(body)
+                    tmp_path = tmp.name
+                msg = lloyd.import_brain(tmp_path, trainer=trainer)
+                os.unlink(tmp_path)
+                self._json_response({"message": msg})
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
 
@@ -117,6 +155,22 @@ class LloydHandler(SimpleHTTPRequestHandler):
 
 def run():
     port = int(os.environ.get("PORT", 8080))
+    # try to restore previous brain if it exists
+    latest = BRAIN_DIR / "latest_brain.npz"
+    if latest.exists():
+        try:
+            trainer.load_brain(latest)
+            print("Restored previous neural brain")
+        except Exception as e:
+            print(f"Could not restore brain: {e}")
+    mem = BRAIN_DIR / "latest_memory.json"
+    if mem.exists():
+        try:
+            lloyd.memory.load(str(mem))
+            print("Restored previous memory")
+        except Exception:
+            pass
+
     server = HTTPServer(("0.0.0.0", port), LloydHandler)
     print(f"Lloyd is live on port {port}")
     server.serve_forever()
