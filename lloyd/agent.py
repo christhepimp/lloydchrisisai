@@ -18,6 +18,14 @@ import json
 import tempfile
 
 
+def _hit_text(h) -> str:
+    if isinstance(h, tuple):
+        return str(h[0])
+    if isinstance(h, dict):
+        return str(h.get("text", h))
+    return str(h)
+
+
 class Lloyd:
     def __init__(self, trainer=None):
         self.memory = VectorMemory(dim=32)
@@ -57,10 +65,7 @@ class Lloyd:
             if not hits:
                 reply = "my memory’s blank on that rn — teach me and i’ll keep it"
             else:
-                bits = []
-                for h in hits:
-                    t = h.get("text") if isinstance(h, dict) else str(h)
-                    bits.append(t[:120])
+                bits = [_hit_text(h)[:120] for h in hits]
                 reply = "from memory: " + " | ".join(bits)
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             return apply_genz_style(reply)
@@ -96,12 +101,10 @@ class Lloyd:
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             return reply
 
-        # ---- chat path: neural first if coherent, else english engine ----
         reply = None
         if self.trainer is not None:
             try:
                 neural = self.trainer.generate_reply(user_input, max_new=72)
-                # only trust neural if it looks like words, not garbage
                 if neural and len(neural) > 8:
                     letters = sum(ch.isalpha() for ch in neural)
                     if letters / max(len(neural), 1) > 0.55:
@@ -113,7 +116,7 @@ class Lloyd:
             hits = self.memory.search(user_input, top_k=2)
             base = simple_reply(user_input)
             if hits and random.random() < 0.5:
-                tip = hits[0].get("text", "") if isinstance(hits[0], dict) else str(hits[0])
+                tip = _hit_text(hits[0])
                 reply = base + f" (side note from memory: {tip[:80]})"
             else:
                 reply = base
