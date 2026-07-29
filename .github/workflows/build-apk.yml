@@ -1,0 +1,86 @@
+name: Build Lloyd APK
+
+on:
+  workflow_dispatch:          # run manually from Actions tab
+    inputs:
+      server_url:
+        description: "Lloyd backend URL (leave empty to use in-app settings)"
+        required: false
+        default: ""
+  push:
+    branches: [main]
+    paths:
+      - "interface/mobile_web/**"
+      - "mobile/**"
+      - "package.json"
+      - ".github/workflows/build-apk.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Capacitor + deps
+        run: |
+          npm init -y
+          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+
+      - name: Inject server URL (optional)
+        run: |
+          URL="${{ github.event.inputs.server_url }}"
+          if [ -n "$URL" ]; then
+            echo "Baking server URL: $URL"
+            sed -i "s|const API = window.location.origin;|const API = \"$URL\";|" interface/mobile_web/index.html
+          else
+            echo "No server URL provided — APK will use in-app Settings"
+          fi
+
+      - name: Init Capacitor project
+        run: |
+          npx cap init "Lloyd" "ai.lloyd.chris" --web-dir interface/mobile_web
+          # overwrite with our config
+          cp mobile/capacitor.config.json capacitor.config.json || true
+          npx cap add android
+          npx cap sync android
+
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          ./gradlew assembleDebug --no-daemon
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: lloyd-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          echo "### Lloyd APK ready" >> $GITHUB_STEP_SUMMARY
+          echo "Download the artifact **lloyd-apk** from this run." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Install on Android: enable Install from unknown sources, then open the .apk" >> $GITHUB_STEP_SUMMARY
