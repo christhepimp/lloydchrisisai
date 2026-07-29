@@ -3,6 +3,8 @@ Lloyd Trainer
 =============
 Takes raw text from uploaded files and actually trains the TinyTransformer.
 Character-level for simplicity and pure-scratch purity.
+
+The model is fully portable — call trainer.save_brain() / load_brain().
 """
 
 import numpy as np
@@ -23,7 +25,6 @@ class LloydTrainer:
             max_seq_len=64,
         )
         self.vocab_size = vocab_size
-        # Simple char-level mapping (printable ASCII + a bit more)
         self.chars = sorted(set(chr(i) for i in range(32, 127)))
         self.stoi = {ch: i % vocab_size for i, ch in enumerate(self.chars)}
         self.itos = {i: ch for ch, i in self.stoi.items()}
@@ -34,7 +35,7 @@ class LloydTrainer:
             if ch in self.stoi:
                 ids.append(self.stoi[ch])
             else:
-                ids.append(0)  # unknown
+                ids.append(0)
         return ids
 
     def make_batches(self, text: str, seq_len: int = 32, batch_size: int = 8) -> List[Tuple[np.ndarray, np.ndarray]]:
@@ -48,7 +49,7 @@ class LloydTrainer:
             x = np.array([chunk[:-1]])
             y = np.array([chunk[1:]])
             batches.append((x, y))
-            if len(batches) >= batch_size * 4:  # limit for speed
+            if len(batches) >= batch_size * 4:
                 break
         return batches
 
@@ -75,7 +76,6 @@ class LloydTrainer:
         reports = []
         for f in files:
             text = f.read_text(encoding="utf-8", errors="ignore")
-            # Clean a bit
             text = re.sub(r"\s+", " ", text).strip()
             if len(text) < 20:
                 continue
@@ -89,3 +89,16 @@ class LloydTrainer:
             "reports": reports,
             "message": f"Lloyd trained on {len(files)} file(s) for {total_steps} steps total."
         }
+
+    # ------------------------------------------------------------------
+    # PORTABLE BRAIN
+    # ------------------------------------------------------------------
+
+    def save_brain(self, path: str | Path = "lloyd_brain.npz"):
+        """Save the neural weights so they can move to another device later."""
+        self.model.save(path)
+        return str(path)
+
+    def load_brain(self, path: str | Path):
+        """Load previously trained weights."""
+        self.model.load(path)

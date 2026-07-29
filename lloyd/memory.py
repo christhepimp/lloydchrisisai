@@ -2,6 +2,7 @@
 Lloyd's Pure-Scratch Vector Memory
 ==================================
 Simple vector memory implemented from scratch (no external vector DB).
+Portable via save() / load().
 """
 
 import numpy as np
@@ -19,10 +20,6 @@ class VectorMemory:
         self.metadata: List[dict] = []
 
     def _embed(self, text: str) -> np.ndarray:
-        """
-        Extremely simple bag-of-characters embedding (pure scratch).
-        Later we will replace this with real embeddings from the Transformer.
-        """
         vec = np.zeros(self.dim)
         for i, char in enumerate(text.lower()[:self.dim * 4]):
             vec[i % self.dim] += (ord(char) % 97) / 26.0
@@ -33,7 +30,6 @@ class VectorMemory:
 
     def add(self, text: str, meta: Optional[dict] = None):
         if len(self.vectors) >= self.max_items:
-            # Remove oldest
             self.vectors.pop(0)
             self.texts.pop(0)
             self.metadata.pop(0)
@@ -53,18 +49,20 @@ class VectorMemory:
 
     def save(self, path: str = "lloyd_memory.json"):
         data = {
+            "dim": self.dim,
             "texts": self.texts,
             "metadata": self.metadata,
             "vectors": [v.tolist() for v in self.vectors],
         }
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f)
 
     def load(self, path: str = "lloyd_memory.json"):
         if not os.path.exists(path):
             return
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
+        self.dim = data.get("dim", self.dim)
         self.texts = data.get("texts", [])
         self.metadata = data.get("metadata", [])
         self.vectors = [np.array(v) for v in data.get("vectors", [])]
