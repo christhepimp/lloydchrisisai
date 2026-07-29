@@ -1,8 +1,8 @@
 """
 Lloyd Local + Deployable Server
 ===============================
-Works on localhost and on cloud hosts (Render, Railway, etc.)
-Same brain as the APK. Export/import lets you move him later.
+Works on localhost and cloud hosts.
+Same original brain: pure-NumPy chat + pure-NumPy images.
 """
 
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -17,8 +17,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lloyd.agent import Lloyd
 from lloyd.trainer import LloydTrainer
 
-lloyd = Lloyd()
 trainer = LloydTrainer()
+lloyd = Lloyd(trainer=trainer)
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -28,7 +28,11 @@ BRAIN_DIR.mkdir(exist_ok=True)
 
 class LloydHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(Path(__file__).parent / "interface" / "mobile_web"), **kwargs)
+        super().__init__(
+            *args,
+            directory=str(Path(__file__).parent / "interface" / "mobile_web"),
+            **kwargs,
+        )
 
     def do_GET(self):
         if self.path == "/" or self.path == "/index.html":
@@ -42,7 +46,9 @@ class LloydHandler(SimpleHTTPRequestHandler):
                 data = out.read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/octet-stream")
-                self.send_header("Content-Disposition", "attachment; filename=lloyd_brain.lloyd")
+                self.send_header(
+                    "Content-Disposition", "attachment; filename=lloyd_brain.lloyd"
+                )
                 self.send_header("Content-Length", str(len(data)))
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
@@ -64,8 +70,16 @@ class LloydHandler(SimpleHTTPRequestHandler):
                 if not user_msg:
                     self._json_response({"reply": "yo say something"})
                     return
-                reply = lloyd.think(user_msg)
-                self._json_response({"reply": reply})
+                result = lloyd.think(user_msg)
+                if isinstance(result, dict):
+                    payload = {
+                        "reply": result.get("message", ""),
+                        "image": result.get("image"),
+                        "id": result.get("id"),
+                    }
+                else:
+                    payload = {"reply": result}
+                self._json_response(payload)
             except Exception as e:
                 self._json_response({"reply": f"error: {e}"}, status=500)
 
@@ -85,11 +99,13 @@ class LloydHandler(SimpleHTTPRequestHandler):
                         text = parts[1].split("\r\n--")[0]
                         fpath.write_text(text, encoding="utf-8")
                         lloyd.remember(f"User uploaded training file: {fname}")
-                        self._json_response({
-                            "status": "ok",
-                            "filename": fname,
-                            "message": f"got it. saved as {fname}. hit Train when ready."
-                        })
+                        self._json_response(
+                            {
+                                "status": "ok",
+                                "filename": fname,
+                                "message": f"got it. saved as {fname}. hit Train when ready.",
+                            }
+                        )
                         return
                 self._json_response({"error": "could not parse file"}, status=400)
             except Exception as e:
@@ -99,28 +115,36 @@ class LloydHandler(SimpleHTTPRequestHandler):
             try:
                 files = list(UPLOAD_DIR.glob("*.txt"))
                 if not files:
-                    self._json_response({"message": "no files uploaded yet. upload a .txt first."})
+                    self._json_response(
+                        {"message": "no files uploaded yet. upload a .txt first."}
+                    )
                     return
 
-                result = trainer.train_on_files(files, steps_per_file=25)
+                result = trainer.train_on_files(files, steps_per_file=40)
 
                 for f in files:
                     text = f.read_text(encoding="utf-8", errors="ignore")[:300]
                     lloyd.remember(f"Trained on {f.name}: {text}")
 
-                # auto-save brain after training so progress is never lost
                 trainer.save_brain(BRAIN_DIR / "latest_brain.npz")
                 lloyd.memory.save(str(BRAIN_DIR / "latest_memory.json"))
+                try:
+                    lloyd.image_gen.save(BRAIN_DIR / "latest_image_net.npz")
+                except Exception:
+                    pass
 
-                self._json_response({
-                    "message": result["message"] + " " + " | ".join(result.get("reports", [])[:3])
-                })
+                self._json_response(
+                    {
+                        "message": result["message"]
+                        + " "
+                        + " | ".join(result.get("reports", [])[:3])
+                    }
+                )
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
 
         elif self.path == "/import":
             try:
-                # raw body is the .lloyd file
                 with tempfile.NamedTemporaryFile(suffix=".lloyd", delete=False) as tmp:
                     tmp.write(body)
                     tmp_path = tmp.name
@@ -155,7 +179,6 @@ class LloydHandler(SimpleHTTPRequestHandler):
 
 def run():
     port = int(os.environ.get("PORT", 8080))
-    # try to restore previous brain if it exists
     latest = BRAIN_DIR / "latest_brain.npz"
     if latest.exists():
         try:
@@ -168,6 +191,13 @@ def run():
         try:
             lloyd.memory.load(str(mem))
             print("Restored previous memory")
+        except Exception:
+            pass
+    img_net = BRAIN_DIR / "latest_image_net.npz"
+    if img_net.exists():
+        try:
+            lloyd.image_gen.load(img_net)
+            print("Restored previous image net")
         except Exception:
             pass
 
