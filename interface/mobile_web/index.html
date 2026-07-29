@@ -36,6 +36,7 @@
     .lloyd { align-self:flex-start; background:#132a22; border:1px solid #00ff9d33; border-bottom-left-radius:4px; }
     .lloyd::before { content:"Lloyd"; display:block; font-size:.7rem; color:var(--accent); margin-bottom:4px; font-weight:600; }
     .system { align-self:center; background:#222; color:var(--muted); font-size:.8rem; border-radius:12px; padding:8px 14px; }
+    .msg img.lloyd-img { display:block; max-width:min(240px,70vw); width:100%; border-radius:12px; margin-top:8px; image-rendering:pixelated; border:1px solid #00ff9d44; }
     footer { padding:12px; background:var(--card); border-top:1px solid #333; display:flex; gap:8px; align-items:center; }
     #input { flex:1; background:#222; border:1px solid #444; border-radius:24px; padding:12px 18px; color:white; font-size:1rem; outline:none; }
     #input:focus { border-color:var(--accent); }
@@ -76,7 +77,7 @@
   </header>
   <div id="chat"></div>
   <footer>
-    <input id="input" type="text" placeholder="say something..." autocomplete="off" />
+    <input id="input" type="text" placeholder="say something or draw neon city..." autocomplete="off" />
     <button id="send">Go</button>
   </footer>
   <input type="file" id="fileInput" accept=".txt,text/plain" />
@@ -87,10 +88,9 @@
       <div class="hint">
         <b>Important:</b> APK and Termux are different apps.
         <code>127.0.0.1</code> will NOT work.<br><br>
-        In Termux run <code>ifconfig</code> and use your phone IP, e.g.<br>
-        <code>http://10.11.205.156:8080</code><br><br>
-        Keep <code>python server.py</code> running in Termux.<br>
-        Rebuild APK from GitHub Actions for cleartext HTTP fix.
+        In Termux run <code>ifconfig</code> and use your phone IP.<br>
+        Keep <code>python server.py</code> running.<br><br>
+        Try: <code>draw neon city</code> for pure-NumPy images.
       </div>
       <p>Paste full URL (include http:// and port):</p>
       <input id="serverUrl" type="text" placeholder="http://10.11.205.156:8080" inputmode="url" />
@@ -127,6 +127,23 @@
       d.textContent=text;
       chat.appendChild(d);
       chat.scrollTop=chat.scrollHeight;
+      return d;
+    }
+    function addLloydWithImage(text, imageUri){
+      const d=document.createElement("div");
+      d.className="msg lloyd";
+      const t=document.createElement("div");
+      t.textContent=text;
+      d.appendChild(t);
+      if(imageUri){
+        const img=document.createElement("img");
+        img.className="lloyd-img";
+        img.alt="lloyd image";
+        img.src=imageUri;
+        d.appendChild(img);
+      }
+      chat.appendChild(d);
+      chat.scrollTop=chat.scrollHeight;
     }
     async function send(){
       const text=input.value.trim();
@@ -138,9 +155,13 @@
         const res=await fetch(API+"/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:text})});
         if(!res.ok) throw new Error("HTTP "+res.status);
         const data=await res.json();
-        addMessage(data.reply||"...","lloyd");
+        if(data.image){
+          addLloydWithImage(data.reply||"here", data.image);
+        } else {
+          addMessage(data.reply||"...","lloyd");
+        }
       }catch(e){
-        addMessage("can't reach "+API+" — keep Termux server.py running. Use WiFi IP from ifconfig. Error: "+e.message,"system");
+        addMessage("can't reach "+API+" — keep Termux server.py running. Error: "+e.message,"system");
       }
     }
     document.getElementById("send").addEventListener("click",send);
@@ -157,7 +178,7 @@
     });
     document.getElementById("trainBtn").addEventListener("click",async()=>{
       if(!API) return;
-      addMessage("training...","system");
+      addMessage("training pure-numpy brain...","system");
       try{ const res=await fetch(API+"/train",{method:"POST"}); const data=await res.json(); addMessage(data.message||data.error||"done","system"); }
       catch(e){ addMessage("train failed: "+e.message,"system"); }
     });
@@ -169,7 +190,7 @@
         if(!res.ok) throw new Error("fail");
         const blob=await res.blob();
         const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="lloyd_brain.lloyd"; a.click();
-        addMessage("brain exported","system");
+        addMessage("brain exported (weights + memory + image net)","system");
       }catch(e){ addMessage("export failed","system"); }
     });
     document.getElementById("importBtn").addEventListener("click",()=>document.getElementById("brainInput").click());
@@ -205,12 +226,12 @@
         addMessage("connected - Lloyd says: "+(data.reply||"ok"),"system");
         localStorage.setItem("lloyd_server_url",v); API=v;
       }catch(e){
-        addMessage("test failed: "+e.message+" — use WiFi IP from ifconfig, keep server.py running, rebuild APK for cleartext","system");
+        addMessage("test failed: "+e.message,"system");
       }
     });
     setTimeout(()=>{
-      if(!API) addMessage("yo im lloyd. open Settings and set http://YOUR_PHONE_IP:8080 from Termux ifconfig — not 127.0.0.1","lloyd");
-      else addMessage("yo im lloyd. server: "+API,"lloyd");
+      if(!API) addMessage("yo im lloyd. pure numpy brain + pure numpy images. set server in Settings. try: draw neon city","lloyd");
+      else addMessage("yo im lloyd. pure original. try: draw neon city | upload + train for better chat","lloyd");
     }, 2900);
   </script>
 </body>
