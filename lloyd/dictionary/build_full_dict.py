@@ -7,10 +7,20 @@ ONLY words in these groups get values:
   +7$   pattern indicators / relational connectors
 
 All other words have NO value and are omitted.
+
+This script rebuilds special_plus10s.txt from the hard-coded category sets.
+Overlaps between PATTERN and the +10 groups are assigned +10$.
+
+Run: python build_full_dict.py
 """
 
 from __future__ import annotations
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Source-of-truth category sets (expanded)
+# Keep in sync with README.md category descriptions.
+# ---------------------------------------------------------------------------
 
 CODING = set("""
 code coding program programming programmer function variable class object method
@@ -46,49 +56,38 @@ stackoverflow segfault crash core heapoverflow bufferoverflow memoryleak danglin
 garbagecollection gc reference counting bitwise operator bitwiseand bitwiseor bitwisexor
 endian littleendian bigendian serialization deserialization pickle orm sqlalchemy prisma
 typeorm migration schema indexscan fullscan queryplan explain transaction isolation
-concurrency mutex lock semaphore deadlock racecondition atomic atomicity
-go cplusplus csharp scala haskell elixir clojure erlang dart flutter reactnative
-swiftui jetpack compose android ios macos windows
-kubernetes k8s helm chart ingress service pod deployment statefulset
-prometheus grafana elasticsearch kibana logstash fluentd
-kafka rabbitmq redis mongodb postgresql mysql sqlite dynamodb cassandra
-nginx apache tomcat gunicorn uvicorn
-gitops argo flux jenkins travis circleci githubactions
-terraform pulumi cloudformation ansible chef puppet
-microservices eventdriven cqrs eventsourcing
-solid dry kiss yagni cleanarchitecture hexagonal
-monad functor applicative monoid semigroup
-typeclass trait protocol interface
-garbagecollector markandsweep referencecounting
-jit aot interpreter bytecode
-llvm clang gcc msvc rustc
-package manager dependencyinjection inversionofcontrol
-unit test integrationtest e2e endtoend
-mock stub spy fixture
-coverage branchcoverage linecoverage
-profiler flamegraph memoryprofiler
-async await coroutine greenlet
-promise future task threadpool
-websocket sse longpolling
-restful soap rpc grpc
-openapi swagger postman insomnia
-jsonschema protobuf avro thrift
-orm activerecord datamapper
-migration seed fixture
-index primarykey foreignkey constraint
-transaction acid isolationlevel
-normalization denormalization
-sharding replication failover
-loadbalancer reverseproxy cdn
-cache invalidation ttl
-ratelimit throttle circuitbreaker
-retry backoff exponential
-idempotent eventuallyconsistent
-observability monitoring logging tracing
-opentelemetry jaeger zipkin
-featureflag canary bluegreen
-rollback blue green deployment
-infrastructure as code
+concurrency mutex lock semaphore deadlock racecondition atomic atomicity parallel
+frontenddev backenddev fullstackdev component components state props hook hooks
+redux zustand context provider consumer render rendering virtualdom dom
+useeffect usestate usememo usecallback coroutine coroutines multiprocessing
+vector matrix embeddings batch epoch epochs loss optimizer relu sigmoid softmax
+activation layer layers dense convolutional cnn rnn lstm gru selfattention multihead
+encoder decoder dataloader preprocessing normalization standardization scaling
+onehot encoding categorical numerical join joins select insert update delete
+groupby orderby primarykey foreignkey constraint constraints trigger triggers
+storedprocedure view views materialized schemas orms sequelize mongoose redis
+mongodb postgres postgresql mysql sqlite dynamodb firestore cassandra elasticsearch
+restful sse eventstream middleware router routing endpoints controller controllers
+service services repositories dto entity entities models validation validator
+validators serializer serializers deserializer unitests integrationtest integrationtests
+e2e endtoend mocks stub stubs spy spies fixture fixtures lint linters format
+formatter formatters typecheck typechecking interpret interpreter interpreters
+bytecode objectcode linker linking loading loader runtimes package manager managers
+lockfile lockfiles yarnlock packagelock requirements k8s chart charts
+puppet chef jenkins githubactions gitlabci circleci continuous edge computing
+cuda tpu npu accelerator accelerators cores hyperthreading ssd hdd storage
+filesystem filesystems networking packet packets icmp dns dhcp bind listen
+accept connect send recv ssl tls certificate certificates openssl oauth2 jwe jws
+refresh rbac abac encryption decryption hashing aes rsa ecc bcrypt scrypt
+argon2 sha256 sha512 base64 urlencode urldecode bitbucket commits branches
+cherry pick stashpop pullrequest pr prs issue issues milestone milestones
+commandline zsh fish powershell sublime atom neovim vim emacs marketplace
+debugger breakpoint breakpoints logger loggers level levels exceptions try
+catch finally raise throw throws stacktrace traceback assertion assertions
+refactoring optimization scalable assembly opcodes transpile transpiler
+rollup esbuild swc turbopack drizzle memcached opensearch kafka rabbitmq
+nats pubsub prometheus grafana datadog sentry istio envoy pulumi cloudformation
+malloc free alloc stackframe callstack dereference goroutine
 """.split())
 
 HACKING = set("""
@@ -108,15 +107,9 @@ exfiltration dataexfil obfuscation packing unpacking sandboxescape antivirusbypa
 edr endpointdetection threatintel threatintelligence indicatorofcompromise malwareanalysis
 reverseengineering ghidra ida radare2 binaryninja burpsuite owasp zap kali parrot blackarch
 wifi cracking wpa2 aircrack bluetooth spoofing physical security lockpicking socialengineering
-pretexting sqlmap hydra medusa ncrack aircrackng reaver bully hashcat john mimikatz bloodhound
-cobaltstrike empire metasploitframework wireshark tshark burpsuite owaspzap nessus openvas
-nikto dirbuster gobuster sublist3r amass theharvester reconng maltego shodan censys
-virustotal hybridanalysis cuckoo sandbox anyrun yara sigma snort suricata ossec wazuh
-splunk elastic mitre attck tactics techniques procedures initialaccess execution persistence
-privilegeescalation defenseevasion credentialaccess discovery lateralmovement collection
-commandandcontrol exfiltration impact livingofftheland lolbins powershell empire
-cobaltstrike redteam blueteam purpleteam threathunting incidentresponse forensics
-memoryforensics volatility rekall autopsy sleuthkit
+pretexting 0day zeroday rce lfi rfi ssrf xxe ssti idor bac privesc
+msfvenom nuclei masscan burp mitm mitmproxy john hydra
+shell
 """.split())
 
 STRUCTURE = set("""
@@ -139,13 +132,12 @@ relative coordinating subordinating correlative punctuationmark quotationmark qu
 exclamationmark ellipsis dash capitalization capitalizationrule spelling orthography morphology
 phoneme morpheme syllable lexeme lemma stem root affix prefix suffix infix derivation inflection
 synonym antonym hyponym hypernym collocation idiomatic
-furthermore moreover nevertheless however despite whereas although though eventhough
-inaddition additionally ontheotherhand forexample forinstance inotherwords thatis
-asaresult asaconsequence dueto owingto inspiteof bymeansof inorderto sothat suchthat
-notonly butalso eitheror neithernor bothand whetheror asif asthough ratherthan insteadof
-accordingto withregardto intermsof onbehalfof infavorof incaseof bythetime assoon as
-aslongas providedthat assumingthat giventhat seeingthat nowthat once whenever wherever
-whatever whichever whoever whomever
+nouns verbs adjectives adverbs pronouns prepositions conjunctions interjections
+subjects predicates objects clauses phrases sentences paragraphs articles determiners
+tenses voices moods participles auxiliaries modals punctuations commas periods
+colons semicolons apostrophes hyphens dashes ellipses quotationmarks questionmarks
+exclamationmarks phonemes morphemes syllables lexemes lemmas stems roots affixes
+prefixes suffixes infixes synonyms antonyms hyponyms hypernyms collocations
 """.split())
 
 SLANG = set("""
@@ -154,15 +146,8 @@ lowkey highkey sus salty mid slay slaps vibe vibes rizz sigma skibidi gyatt base
 goat goated npc cope seethe aura drip flex clout stan tea spill periodt snatched lmao lmfao
 lol rofl omg wtf smh fyp irl dm ghost ghosted simp simping thirsty downbad valid delulu
 unalive iykyk rn nvm deadass finna gonna wanna gotta yall sis queen king bestie bff bae woke
-trash cooked brainrot nocap forreal rizzler rizzgod delulu brainrot ratioed
-itsgiving ate leftnocrumbs understoodtheassignment maincharacter sidecharacter
-pookie baddie ick redflag greenflag situationship situationships ghosting breadcrumbing
-orbiting softlaunch hardlaunch cuffingseason touchgrass nothoughts headempty livingrentfree
-caughtin4k saidwhatneededtobesaid periodt slayqueen youatethat leftnocrumbs
-understoodtheassignment maincharacterenergy sidecharacterenergy deluluisthesolulu
-itsgiving notthe theaudacity thenerve icanteven imdeceased imdead imscreaming
-imcrying imhowling imwheezing nocap cap mid trash cooked burnt fired slaps hitsdifferent
-vibecheck auracheck rizzcheck sigmagrindset alpha beta omega npcbehavior maincharactersyndrome
+trash cooked brainrot forreal rizzler rizzgod ratioed sheesh yeet noob poggers
+ghosting
 """.split())
 
 ATTITUDE = set("""
@@ -175,19 +160,7 @@ energy presence charisma charm style edge edgy dark light positive negative toxi
 fake authentic genuine extra dramatic petty messy clean focus discipline lazy productive
 winner loser champion underdog rebel selfassured assured fearlessness bravery courage
 hustler grinder charismatic charming focused disciplined
-confident selfconfident selfassured selfaware selfreliant selfsufficient ambitious driven
-motivated determined persistent resilient tenacious gritty bold daring courageous fearless
-fierce intense passionate enthusiastic optimistic pessimistic positive negative realistic
-idealistic pragmatic cynical skeptical trusting openminded closedminded curious inquisitive
-creative innovative analytical logical emotional rational empathetic compassionate kind cruel
-generous selfish humble arrogant modest boastful honest dishonest loyal disloyal reliable
-unreliable responsible irresponsible disciplined undisciplined focused distracted productive
-lazy organized disorganized punctual late professional unprofessional mature immature wise
-foolish intelligent stupid clever dumb witty dry sarcastic sincere blunt diplomatic direct
-indirect assertive passiveaggressive dominant submissive leader follower independent dependent
-stubborn flexible proud humble egodriven charismatic magnetic charming awkward stylish
-fashionable edgy mainstream dark light toxic healthy genuine fake authentic performative
-extra dramatic calm petty generous messy clean focused scattered disciplined wild
+attitudes personalities
 """.split())
 
 HUMOR = set("""
@@ -197,13 +170,7 @@ morbid twisted sick disturbing offensive crude adult nsfw dirty raunchy sexual i
 punchline setup sketch improv wit corny cheesy unfunny deadpan absurdist surreal wholesome
 cursed blessed chaos goblin feral unhinged deranged psychotic maniac evil villain spoiler
 banter tease teasing dadjoke punny wordplay memeable shitposting darkcomedy blackcomedy standup
-humorous comedic laughable ridiculous absurd surreal ironic sarcastic satirical parody
-memeculture shitpostenergy trollbehavior roastsession burn gallowshumor darkhumor blackcomedy
-morbidhumor twistedhumor sickjoke offensivehumor crudehumor adulthumor nsfwhumor dirtyjoke
-raunchyjoke sexualhumor innuendo punchline setup sketchcomedy improvcomedy standup wittybanter
-cornyjoke cheesyhumor unfunny deadpanhumor absurdisthumor surrealhumor wholesomememe cursedmeme
-blessedmeme chaosenergy goblinmode feralmode unhingedenergy derangedtake psychoticbreak
-maniacenergy evillaugh villainarc spoileralert banter teasing dadjoke pun wordplay
+humour laughter comedians parodies spoilers dadjokes
 """.split())
 
 PATTERN = set("""
@@ -227,15 +194,18 @@ influence influenced determines determine determined depends depend dependent in
 correlation correlates sequentially sequential prior subsequent precedes following ordered
 cyclic cyclical repetition iterative patterned ultimately meanwhile simultaneously concurrent
 analogously likewise conversely correspondingly iff provided assuming entails contingent
-furthermore moreover nevertheless however despite whereas although though
-inaddition additionally ontheotherhand forexample forinstance inotherwords thatis
-asaresult dueto owingto inspiteof bymeansof inorderto sothat suchthat
-notonly butalso eitheror neithernor bothand whetheror asif asthough ratherthan insteadof
-accordingto withregardto intermsof onbehalfof infavorof incaseof bythetime assoon as
-aslongas providedthat assumingthat giventhat seeingthat nowthat once whenever wherever
-whatever whichever whoever whomever henceforth thereafter thereupon whereby wherein whereupon
-albeit notwithstanding
 """.split())
+
+def clean(s):
+    return {w.strip().lower() for w in s if w.strip() and " " not in w.strip()}
+
+CODING = clean(CODING)
+HACKING = clean(HACKING)
+STRUCTURE = clean(STRUCTURE)
+SLANG = clean(SLANG)
+ATTITUDE = clean(ATTITUDE)
+HUMOR = clean(HUMOR)
+PATTERN = clean(PATTERN)
 
 PLUS10 = CODING | HACKING | STRUCTURE | SLANG | ATTITUDE | HUMOR
 PLUS7 = PATTERN - PLUS10
@@ -244,14 +214,19 @@ PLUS7 = PATTERN - PLUS10
 def main():
     out = Path(__file__).parent / "special_plus10s.txt"
     lines = [
-        "# Lloyd Category Dictionary — ONLY valued words",
-        "# +10$ = coding/hacking/structure/slang/attitude/humor",
-        "# +7$  = pattern indicators / relational connectors",
-        "# All other words have NO value (omitted)",
+        "# Lloyd Category Dictionary — ONLY words with importance values",
+        "# Words NOT in these categories have NO value (not listed).",
+        "#",
+        "# ∆word+10$∆ = coding | hacking | english-structure | slang | attitude | humor",
+        "# ∆word+7$∆  = pattern-indicator / relational-connector words",
+        "# $ = context amplifier (spread importance to nearby words)",
+        "# Ranking: +numbers > 0 > -numbers",
+        "# Overlaps between +10$ and +7$ categories receive +10$ preference.",
         "#",
     ]
     for w in sorted(PLUS10):
         lines.append(f"∆{w}+10$∆")
+    lines.append("")
     for w in sorted(PLUS7):
         lines.append(f"∆{w}+7$∆")
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -260,6 +235,7 @@ def main():
     print(f"  +7$  words: {len(PLUS7)}")
     print(f"  total valued: {len(PLUS10) + len(PLUS7)}")
     print("  non-category words: 0 (no value)")
+    print(f"  overlaps forced to +10$: {sorted(PATTERN & PLUS10)}")
 
 
 if __name__ == "__main__":
