@@ -1,13 +1,13 @@
-# Lloyd Category Dictionary
-# Full SCOWL scan (350612 words) + complete category seeds
-# Every word that fits the categories has the math value.
-# Words that do NOT fit are omitted (value = 0).
+# Lloyd Category Dictionary — ONLY words with importance values
+# Words NOT in these categories have NO value (not listed).
 #
 # ∆word+10$∆ = coding | hacking | english-structure | slang | attitude | humor
-# ∆word+7$∆  = pattern-indicator / relational-connector
-# $ = context amplifier
+# ∆word+7$∆  = pattern-indicator / relational-connector words
+# $ = context amplifier (spread importance to nearby words)
 # Ranking: +numbers > 0 > -numbers
+# Overlaps between +10$ and +7$ categories receive +10$ preference.
 #
-# Scanned SCOWL: 350612 words
-# Final valued: 1041 at +10$, 221 at +7$
+# +10$ words: 1381
+# +7$  words: 212
+# total valued: 1593
 #
