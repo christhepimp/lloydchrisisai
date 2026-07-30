@@ -1,0 +1,91 @@
+Lloyd Pattern Lesson 01
+Importance Math + Simple Stories
+================================
+
+This lesson uses the hard-coded importance format:
+  ∆word+N∆
+  ∆word1+word2+N∆
+
+Rules Lloyd already knows:
+- Any + number is more important than no number
+- Any + number is more important than any - number
+- Higher + is stronger (∆x+5∆ beats ∆x+2∆)
+- = means equality
+- + means addition
+- - means subtraction
+- Numbers 1 through 10 and which is greater / less
+
+--------------------------------
+1. Basic Word Values
+--------------------------------
+∆dog+10∆
+∆cat+10∆
+∆fox+10∆
+∆animal+10∆
+
+∆eats+5∆
+∆barks+5∆
+∆walks+5∆
+∆runs+5∆
+∆action+5∆
+
+--------------------------------
+2. Combinations Create Stronger Patterns
+--------------------------------
+∆dog+eats+20∆
+∆dog+barks+15∆
+∆dog+walks+15∆
+∆cat+eats+20∆
+∆cat+walks+15∆
+∆fox+runs+15∆
+∆animal+action+30∆
+
+--------------------------------
+3. Short Stories
+--------------------------------
+Story A – The Dog
+The dog eats.   ∆dog+eats+20∆
+The dog barks.  ∆dog+barks+15∆
+The dog walks.  ∆dog+walks+15∆
+
+Story B – The Cat
+The cat eats.   ∆cat+eats+20∆
+The cat walks.  ∆cat+walks+15∆
+
+Story C – The Fox
+The fox runs.   ∆fox+runs+15∆
+
+--------------------------------
+4. Problem + Correction Example
+--------------------------------
+Question: The cat ______.
+
+Possible scores:
+cat + barks  → lower or unknown
+cat + eats   → ∆cat+eats+20∆  (high)
+cat + walks  → ∆cat+walks+15∆ (good)
+
+Correct preference: The cat eats.
+Wrong guess signal: cat + barks → confidence -5
+Correct signal:     cat + eats  → confidence +5
+
+--------------------------------
+5. What Lloyd Should Discover
+--------------------------------
+The real lesson is not only "dog eats".
+The real lesson is the abstract pattern:
+
+animal + action = relationship / possible behavior   (score +30)
+
+Once that structure is noticed, a new animal can inherit it:
+Fox is also an animal → fox can take an action.
+
+--------------------------------
+6. How to use with Lloyd
+--------------------------------
+1. Symbols = + - and numbers 1-10 are hard-coded in lloyd/importance.py
+2. The parser looks for every pair of ∆ markers
+3. Feed this file (or the PDF text) to Lloyd so the ImportanceEngine stores the scores
+4. Later he can complete sentences by preferring the highest-scoring known combination
+
+— End of Lesson 01 —
