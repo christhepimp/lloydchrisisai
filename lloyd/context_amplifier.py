@@ -9,7 +9,7 @@ Math:
   plain +   CODING | HACKING | SLANG | ATTITUDE
   +$        STRUCTURE | HUMOR | PATTERN (neighbor spill)
 
-DICTIONARY_BOOST_PERCENT = 68  (easy to change)
+DICTIONARY_BOOST_PERCENT = 95  (raised for stronger +7/+10 effect)
 """
 
 from __future__ import annotations
@@ -22,10 +22,10 @@ import numpy as np
 
 MIN_SCORE = -10
 MAX_SCORE = 10
-DICTIONARY_BOOST_PERCENT = 68
+DICTIONARY_BOOST_PERCENT = 95
 CONTEXT_RADIUS = 2
-CONTEXT_SPILL = 0.35
-_LOGIT_SCALE = 4.0
+CONTEXT_SPILL = 0.40
+_LOGIT_SCALE = 6.5
 
 _MARKER_RE = re.compile(
     r"∆\s*<\s*([^∆+\-$]+?)\s*([+-]\d+)\s*(\$?)\s*∆"
