@@ -6,14 +6,19 @@ This lesson uses the hard-coded importance format:
   ∆word+N∆
   ∆word1+word2+N∆
 
-Rules Lloyd already knows:
-- Any + number is more important than no number
-- Any + number is more important than any - number
-- Higher + is stronger (∆x+5∆ beats ∆x+2∆)
-- = means equality
-- + means addition
-- - means subtraction
-- Numbers 1 through 10 and which is greater / less
+Importance ranking (hard-coded):
+  • No number  =  0   (zero / baseline)
+  • Negative numbers (-) are LESS than 0
+  • Positive numbers (+) are HIGHER than both 0 and all negatives
+
+  Order is always:
+      +numbers  >  0 (no number)  >  -numbers
+
+Also hard-coded:
+  = means equality
+  + means addition
+  - means subtraction
+  Numbers 1 through 10 and which is greater / less
 
 --------------------------------
 1. Basic Word Values
@@ -61,9 +66,9 @@ The fox runs.   ∆fox+runs+15∆
 Question: The cat ______.
 
 Possible scores:
-cat + barks  → lower or unknown
-cat + eats   → ∆cat+eats+20∆  (high)
-cat + walks  → ∆cat+walks+15∆ (good)
+cat + barks  → 0 or unknown (zero)
+cat + eats   → ∆cat+eats+20∆  (high positive)
+cat + walks  → ∆cat+walks+15∆ (good positive)
 
 Correct preference: The cat eats.
 Wrong guess signal: cat + barks → confidence -5
@@ -85,7 +90,8 @@ Fox is also an animal → fox can take an action.
 --------------------------------
 1. Symbols = + - and numbers 1-10 are hard-coded in lloyd/importance.py
 2. The parser looks for every pair of ∆ markers
-3. Feed this file (or the PDF text) to Lloyd so the ImportanceEngine stores the scores
-4. Later he can complete sentences by preferring the highest-scoring known combination
+3. No number inside the markers = score 0
+4. Feed this file to Lloyd so the ImportanceEngine stores the scores
+5. Later he can complete sentences by preferring the highest-scoring known combination
 
 — End of Lesson 01 —
