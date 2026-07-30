@@ -1,17 +1,20 @@
 """
 Lloyd Trainer
 =============
-Trains the pure-NumPy TinyTransformer on uploaded text.
-Character-level, fully original. No external models.
-
-Scaled defaults: bigger d_model / layers so chat can actually improve.
+Trains pure-NumPy TinyTransformer.
+Context amplifier bias is fed into multi-head attention on every forward.
 """
 
 import numpy as np
 from pathlib import Path
 from model.tiny_transformer import TinyTransformer, train_step
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import re
+
+try:
+    from lloyd.context_amplifier import amplifier as _amplifier
+except Exception:
+    _amplifier = None
 
 
 class LloydTrainer:
@@ -50,9 +53,22 @@ class LloydTrainer:
     def ids_to_text(self, ids: List[int]) -> str:
         return "".join(self.itos.get(i, "?") for i in ids)
 
+    def _bias(self, text: str, seq_len: Optional[int] = None) -> Optional[np.ndarray]:
+        if _amplifier is None:
+            return None
+        try:
+            b = _amplifier.bias_for_text(text)
+            if seq_len is not None:
+                if b.shape[0] >= seq_len:
+                    return b[:seq_len]
+                return np.pad(b, (0, seq_len - b.shape[0]))
+            return b
+        except Exception:
+            return None
+
     def make_batches(
         self, text: str, seq_len: int = 48, batch_size: int = 8
-    ) -> List[Tuple[np.ndarray, np.ndarray]]:
+    ) -> List[Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]]:
         ids = self.text_to_ids(text)
         if len(ids) < seq_len + 1:
             return []
@@ -64,7 +80,10 @@ class LloydTrainer:
                 break
             x = np.array([chunk[:-1]])
             y = np.array([chunk[1:]])
-            batches.append((x, y))
+            # char-aligned bias for this window of the original text
+            window_text = text[i : i + seq_len] if i + seq_len <= len(text) else text[i:]
+            bias = self._bias(window_text, seq_len=seq_len)
+            batches.append((x, y, bias))
             if len(batches) >= batch_size * 8:
                 break
         return batches
@@ -76,8 +95,8 @@ class LloydTrainer:
 
         losses = []
         for step in range(steps):
-            x, y = batches[step % len(batches)]
-            loss = train_step(self.model, x, y, lr=lr)
+            x, y, bias = batches[step % len(batches)]
+            loss = train_step(self.model, x, y, lr=lr, importance_bias=bias)
             losses.append(loss)
 
         return {
@@ -107,14 +126,13 @@ class LloydTrainer:
         }
 
     def generate_reply(self, prompt: str, max_new: int = 80) -> str:
-        """Sample text from the trained pure-NumPy transformer."""
         ids = self.text_to_ids(prompt)[-self.max_seq_len :]
         if not ids:
             ids = [self.stoi.get("y", 1)]
-        out = self.model.generate(ids, max_new_tokens=max_new)
+        bias = self._bias(prompt)
+        out = self.model.generate(ids, max_new_tokens=max_new, importance_bias=bias)
         new_ids = out[len(ids) :]
         text = self.ids_to_text(new_ids)
-        # stop at first double newline or weird runs
         text = text.split("\n")[0].strip()
         text = re.sub(r"[^\x20-\x7e]+", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
