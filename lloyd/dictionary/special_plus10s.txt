@@ -1,1 +1,20 @@
-# see full content from /tmp/special_plus10s_mereology.txt - pushing via shell workaround next
+# Lloyd Category Dictionary — rebuilt math
+# SOURCE OF TRUTH: build_full_dict.py (run: python build_full_dict.py)
+# Runtime: lloyd.importance loads category sets from build_full_dict automatically.
+#
+# RULES:
+#   STRUCTURE | HUMOR | PATTERN  →  ∆word+N$∆  (context amplifier)
+#   CODING | HACKING | SLANG | ATTITUDE  →  ∆word+N∆  (plain +)
+#   clamp: never over +10 or under -10
+#
+# Examples:
+∆code+10∆
+∆hack+10∆
+∆yo+10∆
+∆attitude+10∆
+∆noun+10$∆
+∆joke+10$∆
+∆because+7$∆
+∆pattern+7$∆
+∆then+7$∆
+∆first+7$∆
