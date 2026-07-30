@@ -1,22 +1,16 @@
 """
 Lloyd Importance bridge
 =======================
-Compatibility layer used by agent / training_loop.
-
-Real systems:
-  lloyd.attention_header   — scores words alone
-  lloyd.context_amplifier  — own program; holds dictionary; boosts header scores
-
-"engine.attend()" = header score → amplifier boost.
+Context amplifier holds the dictionary and builds bias for
+REAL multi-head attention in TinyTransformer.
+No fake attention header.
 """
 
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-from lloyd.attention_header import AttentionHeader, header
 from lloyd.context_amplifier import (
-    ContextAmplifier,
     amplifier,
     parse_importance,
     DICTIONARY_BOOST_PERCENT,
@@ -24,30 +18,10 @@ from lloyd.context_amplifier import (
     MAX_SCORE,
 )
 
-# Re-export for older imports
-__all__ = [
-    "engine",
-    "parse_importance",
-    "teach_equals",
-    "equals",
-    "what_equals",
-    "parse_equals_statement",
-    "apply_plus",
-    "apply_minus",
-    "apply_equals_numeric",
-    "compare_numbers",
-    "demo_basic_math",
-    "DICTIONARY_BOOST_PERCENT",
-]
-
 
 class ImportanceEngine:
-    """Thin API: header alone + context amplifier (dictionary owner)."""
-
     def __init__(self):
-        self.header = header
         self.amplifier = amplifier
-        # alias so older code reading .dictionary still works conceptually
         self.dictionary = amplifier.dictionary
 
     def load_dictionary_file(self, path: str) -> int:
@@ -55,7 +29,6 @@ class ImportanceEngine:
 
     def learn_from_text(self, text: str) -> int:
         n = self.amplifier.learn_from_text(text)
-        # equals markers still taught here for training stories
         import re
 
         for m in re.finditer(
@@ -68,29 +41,21 @@ class ImportanceEngine:
         return self.amplifier.score_word(word)
 
     def status(self) -> str:
-        return (
-            "attention header: independent | "
-            + self.amplifier.status()
-        )
+        return self.amplifier.status()
 
-    def attend(self, text: str) -> List[Tuple[str, float, float, float]]:
-        """header scores → context amplifier boosts."""
-        return self.amplifier.run(text)
+    def bias_for_text(self, text: str):
+        return self.amplifier.bias_for_text(text)
 
-    def attention_header(self, text: str) -> List[Tuple[str, float]]:
-        return [(t, b) for t, _, b, _ in self.attend(text)]
-
-    def header_only(self, text: str) -> List[Tuple[str, float]]:
-        return self.header.score_text(text)
+    def attend(self, text: str):
+        """Report dictionary hits that will bias multi-head attention."""
+        return self.amplifier.run_report(text)
 
     def highlight(self, text: str) -> str:
-        return self.amplifier.highlight(text)
+        return self.amplifier.run_report(text)
 
 
 engine = ImportanceEngine()
 
-
-# ── equals + basic math (unchanged teaching helpers) ─────────────
 _EQUALS: Dict[str, set] = {}
 
 
@@ -159,8 +124,6 @@ def demo_basic_math() -> str:
         [
             f"2 + 3 equals {apply_plus(2, 3)}",
             engine.status(),
-            "header only: "
-            + " ".join(f"{t}={w:.1f}" for t, w in engine.header_only(sample)),
-            "amplifier:   " + engine.highlight(sample),
+            engine.highlight(sample),
         ]
     )
