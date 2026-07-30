@@ -1,22 +1,35 @@
-# Download Lloyd as a ZIP
+# Download Lloyd — Full Up-to-Date ZIP
 
-All project files stay as they are on `main`. GitHub builds a full source zip automatically.
+Repo: **christhepimp/lloydchrisisai**
 
-## Full project ZIP (recommended)
+GitHub always builds a full source zip from the latest `main` branch.
+Every file we added (importance, equals, reward, reflection, training loop, etc.) is included.
 
-**Download everything (current `main` branch):**
+## Direct download (always current)
 
-→ **[lloydchrisisai-main.zip](https://github.com/christhepimp/lloydchrisisai/archive/refs/heads/main.zip)**
+**→ [lloydchrisisai-main.zip](https://github.com/christhepimp/lloydchrisisai/archive/refs/heads/main.zip)**
 
-Same archive via API zipball:
+Alternate API link:
 
-→ [api.github.com zipball/main](https://api.github.com/repos/christhepimp/lloydchrisisai/zipball/main)
+**→ [zipball/main](https://api.github.com/repos/christhepimp/lloydchrisisai/zipball/main)**
 
-## From the GitHub website
+## From the website
 
-1. Open [christhepimp/lloydchrisisai](https://github.com/christhepimp/lloydchrisisai)
-2. Click the green **Code** button
-3. Choose **Download ZIP**
+1. Open https://github.com/christhepimp/lloydchrisisai  
+2. Click green **Code**  
+3. Click **Download ZIP**
+
+## What is inside (current stack)
+
+- `lloyd/agent.py` — main agent  
+- `lloyd/importance.py` — equals rule + ∆importance∆ + math  
+- `lloyd/reward.py` — positive-only rewards  
+- `lloyd/reflection.py` — self-reflection on wrong answers  
+- `lloyd/training_loop.py` — interactive training (free answers → pattern questions)  
+- `lloyd/memory.py`, `english_engine.py`, `personality.py`, `image_gen.py`, `trainer.py`, `tasks.py`  
+- `model/tiny_transformer.py` — pure NumPy transformer  
+- `lessons/` — lesson text files  
+- `server.py`, `flask_app.py`, `main.py`, mobile UI, docs  
 
 ## After download
 
@@ -27,14 +40,13 @@ pip install -r requirements.txt
 python server.py
 ```
 
-Or on Termux:
+Then in chat type:
 
-```bash
-cd ~
-curl -L -o lloyd.zip https://github.com/christhepimp/lloydchrisisai/archive/refs/heads/main.zip
-unzip lloyd.zip
-cd lloydchrisisai-main
-python server.py
+```text
+start training
 ```
 
-No source files were removed or rewritten for this — the zip is a snapshot of the whole repo.
+That runs the live pattern loop (free answers first, then pattern transfer, reflection on wrong, reward on correct).
+
+---
+Share this zip with another AI — it is the full current brain of Lloyd.
