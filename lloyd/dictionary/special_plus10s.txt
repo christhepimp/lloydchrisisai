@@ -5,5 +5,5 @@
 # ∆word+7$∆  = pattern-indicator / relational-connector words
 # $ = context amplifier (spread importance to nearby words)
 # Ranking: +numbers > 0 > -numbers
-# Overlaps between +10$ and +7$ categories receive +10$ preference.
 #
+
