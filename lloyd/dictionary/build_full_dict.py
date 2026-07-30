@@ -2,25 +2,24 @@
 """
 Build Lloyd category-only annotated dictionary.
 
-ONLY words in these groups get values:
-  +10$  coding, hacking, english-structure, slang, attitude, humor
-  +7$   pattern indicators / relational connectors
+Math rules:
+  ∆word+10∆   = important (no context spread)
+  ∆word+10$∆  = important + context amplifier (nearby words get boost)
+  ∆word+7$∆   = pattern connector + context amplifier
+  Scores never above +10 or under -10.
 
-All other words have NO value and are omitted.
+Who gets $ (context amplifier):
+  STRUCTURE, HUMOR, PATTERN  →  always with $
+Who gets plain + only:
+  CODING, HACKING, SLANG, ATTITUDE  →  no $
 
-This script rebuilds special_plus10s.txt from the hard-coded category sets.
-Overlaps between PATTERN and the +10 groups are assigned +10$.
+Overlaps: highest score wins; if any $ category applies, keep $.
 
 Run: python build_full_dict.py
 """
 
 from __future__ import annotations
 from pathlib import Path
-
-# ---------------------------------------------------------------------------
-# Source-of-truth category sets (expanded)
-# Keep in sync with README.md category descriptions.
-# ---------------------------------------------------------------------------
 
 CODING = set("""
 code coding program programming programmer function variable class object method
@@ -196,8 +195,10 @@ cyclic cyclical repetition iterative patterned ultimately meanwhile simultaneous
 analogously likewise conversely correspondingly iff provided assuming entails contingent
 """.split())
 
+
 def clean(s):
     return {w.strip().lower() for w in s if w.strip() and " " not in w.strip()}
+
 
 CODING = clean(CODING)
 HACKING = clean(HACKING)
@@ -207,35 +208,85 @@ ATTITUDE = clean(ATTITUDE)
 HUMOR = clean(HUMOR)
 PATTERN = clean(PATTERN)
 
-PLUS10 = CODING | HACKING | STRUCTURE | SLANG | ATTITUDE | HUMOR
-PLUS7 = PATTERN - PLUS10
+# Categories that use context amplifier ($)
+DOLLAR_CATS = STRUCTURE | HUMOR | PATTERN
+# Categories that use plain + only
+PLAIN_CATS = CODING | HACKING | SLANG | ATTITUDE
+
+
+def score_and_dollar(word: str) -> tuple[int, bool]:
+    """
+    Return (score, use_dollar) for a category word.
+    STRUCTURE/HUMOR → +10$
+    PATTERN only → +7$
+    CODING/HACKING/SLANG/ATTITUDE → +10 (no $)
+    Overlap with $ cats keeps $; score prefers +10 over +7.
+    """
+    in_struct = word in STRUCTURE
+    in_humor = word in HUMOR
+    in_pattern = word in PATTERN
+    in_plain = word in PLAIN_CATS
+
+    use_dollar = in_struct or in_humor or in_pattern
+
+    if in_struct or in_humor or in_plain:
+        score = 10
+    elif in_pattern:
+        score = 7
+    else:
+        score = 0
+
+    # clamp safety
+    score = max(-10, min(10, score))
+    return score, use_dollar
+
+
+def format_marker(word: str, score: int, use_dollar: bool) -> str:
+    sign = f"+{score}" if score >= 0 else str(score)
+    if use_dollar:
+        return f"∆{word}{sign}$∆"
+    return f"∆{word}{sign}∆"
 
 
 def main():
+    all_words = DOLLAR_CATS | PLAIN_CATS
     out = Path(__file__).parent / "special_plus10s.txt"
     lines = [
         "# Lloyd Category Dictionary — ONLY words with importance values",
         "# Words NOT in these categories have NO value (not listed).",
         "#",
-        "# ∆word+10$∆ = coding | hacking | english-structure | slang | attitude | humor",
-        "# ∆word+7$∆  = pattern-indicator / relational-connector words",
-        "# $ = context amplifier (spread importance to nearby words)",
-        "# Ranking: +numbers > 0 > -numbers",
-        "# Overlaps between +10$ and +7$ categories receive +10$ preference.",
+        "# ∆word+10∆  = important (CODING | HACKING | SLANG | ATTITUDE)",
+        "# ∆word+10$∆ = important + context amplifier (STRUCTURE | HUMOR)",
+        "# ∆word+7$∆  = pattern connector + context amplifier (PATTERN)",
+        "# $ = context amplifier — boost surrounding words for the attention header",
+        "# Ranking: +numbers > 0 > -numbers | clamp: never over +10 or under -10",
         "#",
     ]
-    for w in sorted(PLUS10):
-        lines.append(f"∆{w}+10$∆")
+
+    dollar_lines = []
+    plain_lines = []
+    for w in sorted(all_words):
+        score, use_dollar = score_and_dollar(w)
+        if score == 0:
+            continue
+        marker = format_marker(w, score, use_dollar)
+        if use_dollar:
+            dollar_lines.append(marker)
+        else:
+            plain_lines.append(marker)
+
+    lines.append("# --- plain + (no context amplifier) ---")
+    lines.extend(plain_lines)
     lines.append("")
-    for w in sorted(PLUS7):
-        lines.append(f"∆{w}+7$∆")
+    lines.append("# --- +$ context amplifier (STRUCTURE | HUMOR | PATTERN) ---")
+    lines.extend(dollar_lines)
+    lines.append("")
+
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"Wrote {out}")
-    print(f"  +10$ words: {len(PLUS10)}")
-    print(f"  +7$  words: {len(PLUS7)}")
-    print(f"  total valued: {len(PLUS10) + len(PLUS7)}")
-    print("  non-category words: 0 (no value)")
-    print(f"  overlaps forced to +10$: {sorted(PATTERN & PLUS10)}")
+    print(f"  plain +10:  {len(plain_lines)}")
+    print(f"  +$ markers: {len(dollar_lines)}")
+    print(f"  total:      {len(plain_lines) + len(dollar_lines)}")
 
 
 if __name__ == "__main__":
