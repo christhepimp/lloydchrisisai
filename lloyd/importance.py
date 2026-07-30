@@ -5,6 +5,8 @@ Lloyd Importance + Attention Header
 2) Dictionary boosts header scores for valued WORDS and PHRASES.
    - plain +   : CODING | HACKING | SLANG | ATTITUDE
    - +$        : STRUCTURE | HUMOR | PATTERN (+ context spread)
+
+Boost strength is controlled by DICTIONARY_BOOST_PERCENT (easy to change).
 """
 
 from __future__ import annotations
@@ -30,12 +32,38 @@ _EQUALS_STATEMENT = re.compile(
 
 MIN_SCORE = -10
 MAX_SCORE = 10
+
+# =====================================================================
+# TUNABLE — change this one number to retune dictionary boost strength
+# 68 => +68% on the attention-header weight when a word/phrase is valued
+# (full strength at |dict score| == 10; scales down for smaller scores)
+# =====================================================================
+DICTIONARY_BOOST_PERCENT = 68
+
+# How far $ spreads to neighboring tokens (not the main boost %)
 CONTEXT_RADIUS = 2
-CONTEXT_BOOST = 0.35
+# Fraction of the *boost delta* that $ spills to each neighbor step
+CONTEXT_SPILL = 0.35
 
 
 def _clamp(n: int) -> int:
     return max(MIN_SCORE, min(MAX_SCORE, int(n)))
+
+
+def _boost_factor(dict_score: int) -> float:
+    """
+    Multiplier applied to the header weight.
+    +10  with DICTIONARY_BOOST_PERCENT=68 → 1.68
+    +7   → 1 + 0.68*(7/10) = 1.476
+    -10  → 1 - 0.68 = 0.32 (attention pulled down)
+    """
+    if dict_score == 0:
+        return 1.0
+    intensity = abs(dict_score) / float(MAX_SCORE)
+    delta = (DICTIONARY_BOOST_PERCENT / 100.0) * intensity
+    if dict_score > 0:
+        return 1.0 + delta
+    return max(0.0, 1.0 - delta)
 
 
 def parse_importance(text: str) -> List[Tuple[str, int, bool]]:
@@ -73,13 +101,8 @@ class AttentionHeader:
 
 
 class ImportanceDictionary:
-    """
-    Single words + multi-word phrases.
-    Only used to boost header scores — header never reads this.
-    """
-
     def __init__(self):
-        self.table: Dict[str, Tuple[int, bool]] = {}  # key may contain spaces
+        self.table: Dict[str, Tuple[int, bool]] = {}
         self._load_builtin_categories()
         self._load_phrases()
         default = Path(__file__).parent / "dictionary" / "special_plus10s.txt"
@@ -156,24 +179,19 @@ class ImportanceDictionary:
         dollar_n = sum(1 for _, d in self.table.values() if d)
         return (
             f"dictionary: {words} words + {phrases} phrases | "
-            f"+$ amplifier entries: {dollar_n} | clamp [{MIN_SCORE}, {MAX_SCORE}]"
+            f"boost={DICTIONARY_BOOST_PERCENT}% | "
+            f"+$ entries: {dollar_n} | clamp [{MIN_SCORE}, {MAX_SCORE}]"
         )
 
 
 def _match_spans(
     tokens: List[str], dictionary: ImportanceDictionary
 ) -> List[Tuple[int, int, int, bool]]:
-    """
-    Longest-first phrase/word match on token stream.
-    Returns list of (start_idx, end_idx_exclusive, score, has_dollar).
-    Non-overlapping; longer phrases win.
-    """
     n = len(tokens)
     covered = [False] * n
     spans: List[Tuple[int, int, int, bool]] = []
-
-    # phrases first (longest already sorted in phrase_keys)
     lower_tokens = [t.lower() for t in tokens]
+
     for phrase in dictionary.phrase_keys():
         parts = phrase.split()
         plen = len(parts)
@@ -190,7 +208,6 @@ def _match_spans(
                 for j in range(i, i + plen):
                     covered[j] = True
 
-    # single words on remaining tokens
     for i, tok in enumerate(lower_tokens):
         if covered[i]:
             continue
@@ -208,33 +225,37 @@ def apply_dictionary_boost(
     dictionary: ImportanceDictionary,
 ) -> List[float]:
     """
-    Header weights in → boost only dictionary hits (words + phrases) → out.
-    $ spreads boost to neighboring tokens outside the matched span.
+    Header weights in → % boost only on dictionary hits → out.
+
+    Boost = header_weight * (1 ± DICTIONARY_BOOST_PERCENT/100 * |score|/10)
+    $ spills a fraction of the boost *delta* to neighboring tokens.
     """
     n = len(tokens)
     assert len(header_weights) == n
     out = [float(w) for w in header_weights]
-    direct = [0.0] * n
+    delta = [0.0] * n
     dollar_center = [False] * n
 
     for start, end, sc, dol in _match_spans(tokens, dictionary):
+        factor = _boost_factor(sc)
         for i in range(start, end):
-            direct[i] += float(sc)
-            out[i] += float(sc)
+            old = out[i]
+            new = old * factor
+            delta[i] += new - old
+            out[i] = new
             if dol:
                 dollar_center[i] = True
 
+    # context amplifier: spill part of the boost delta to neighbors
     for i in range(n):
-        if not dollar_center[i] or direct[i] == 0:
+        if not dollar_center[i] or delta[i] == 0:
             continue
-        spread = abs(direct[i]) * CONTEXT_BOOST
-        sign = 1.0 if direct[i] > 0 else -1.0
         for d in range(1, CONTEXT_RADIUS + 1):
-            add = spread * (1.0 / d) * sign
+            spill = delta[i] * CONTEXT_SPILL * (1.0 / d)
             if i - d >= 0:
-                out[i - d] += add
+                out[i - d] += spill
             if i + d < n:
-                out[i + d] += add
+                out[i + d] += spill
 
     return out
 
@@ -254,23 +275,26 @@ class ImportanceEngine:
         return self.dictionary.get(word)
 
     def status(self) -> str:
-        return "attention header: independent | " + self.dictionary.status()
+        return (
+            f"attention header: independent | "
+            f"DICTIONARY_BOOST_PERCENT={DICTIONARY_BOOST_PERCENT} | "
+            + self.dictionary.status()
+        )
 
     def attend(self, text: str) -> List[Tuple[str, float, float, float]]:
         tokens = re.findall(r"[a-zA-Z0-9']+", text.lower())
         header_w = self.header.score(tokens)
         boosted = apply_dictionary_boost(tokens, header_w, self.dictionary)
 
-        # dict score per token (from spans)
         dict_scores = [0.0] * len(tokens)
         for start, end, sc, _dol in _match_spans(tokens, self.dictionary):
             for i in range(start, end):
                 dict_scores[i] = float(sc)
 
-        rows = []
-        for i, tok in enumerate(tokens):
-            rows.append((tok, header_w[i], boosted[i], dict_scores[i]))
-        return rows
+        return [
+            (tok, header_w[i], boosted[i], dict_scores[i])
+            for i, tok in enumerate(tokens)
+        ]
 
     def attention_header(self, text: str) -> List[Tuple[str, float]]:
         return [(t, b) for t, _, b, _ in self.attend(text)]
@@ -360,6 +384,7 @@ def demo_basic_math() -> str:
     lines = [
         f"2 + 3 equals {apply_plus(2, 3)}",
         engine.status(),
+        f"boost setting: DICTIONARY_BOOST_PERCENT = {DICTIONARY_BOOST_PERCENT}",
         "header only: " + " ".join(f"{t}={w:.1f}" for t, w in engine.header_only(sample)),
         "after dict:  " + engine.highlight(sample),
     ]
