@@ -1,0 +1,100 @@
+Lloyd Pattern Lesson 02
+Stories + Targeted Importance + First Answers + Reward
+======================================================
+
+RULES REMINDER
+- No number inside ∆∆ = 0 (zero)
+- +numbers are higher than 0 and higher than all -numbers
+- Left side of = equals right side (any content)
+- Reward only (no punishment) when answer is correct
+
+======================================================
+STORY 1 — The Dog
+======================================================
+
+The sun was out. A bird flew by. Someone walked past the house.
+The dog barked. ∆the dog barked+20∆
+The dog ate. ∆the dog ate+20∆
+The dog ran. ∆the dog ran+20∆
+Later it got quiet again.
+
+QUESTION 1
+The dog ______?
+
+CORRECT ANSWER (given so Lloyd can succeed first):
+The dog barked.
+(also acceptable: The dog ate. / The dog ran.)
+
+Why these words have +20:
+Only the key actions of the dog are marked with importance.
+The rest of the story has no + numbers so they stay at 0.
+
+When Lloyd answers correctly → give reward +5
+
+======================================================
+STORY 2 — The Cat
+======================================================
+
+It was a calm afternoon. A car drove by. Leaves moved in the wind.
+The cat ate. ∆the cat ate+20∆
+The cat walked. ∆the cat walked+15∆
+The cat sat. ∆the cat sat+10∆
+Then everything was still.
+
+QUESTION 2
+The cat ______?
+
+CORRECT ANSWER (given so Lloyd can succeed):
+The cat ate.
+(also acceptable: The cat walked. / The cat sat.)
+
+Only the cat action phrases carry + numbers.
+Everything else in the story = 0.
+
+When Lloyd answers correctly → give reward +5
+
+======================================================
+STORY 3 — The Fox
+======================================================
+
+Night was coming. The trees were dark. A light went on in a window.
+The fox ran. ∆the fox ran+20∆
+The fox hid. ∆the fox hid+15∆
+Then it was gone.
+
+QUESTION 3
+The fox ______?
+
+CORRECT ANSWER (given so Lloyd can succeed):
+The fox ran.
+(also acceptable: The fox hid.)
+
+Only the fox action phrases carry + numbers.
+
+When Lloyd answers correctly → give reward +5
+
+======================================================
+HOW THE FIRST ANSWERS WORK
+======================================================
+We give Lloyd the correct answers for the first few questions
+so he experiences getting them right and receiving reward.
+This teaches him what reward feels like before we ask
+new questions without the answer provided.
+
+======================================================
+ABSTRACT PATTERN TO NOTICE
+======================================================
+∆animal action+30∆
+
+animal + action equals a strong relationship.
+dog, cat, fox are animals.
+barked, ate, ran, walked, sat, hid are actions.
+
+======================================================
+REWARD RULE (hard-coded)
+======================================================
+- Correct answer → reward points (positive only)
+- Wrong answer → no reward, no punishment
+- Total reward only goes up, never down
+
+— End of Lesson 02 —
