@@ -6,7 +6,10 @@ Hard-coded understanding of:
   +   addition / positive importance
   -   subtraction / negative importance
   numbers 1–10 and their order
-  importance annotations in the form ∆word+5∆ or ∆word1+word2+15∆
+  importance annotations: ∆word+5∆ or ∆word+5$∆
+
+  $ = CONTEXT AMPLIFIER
+      When present, importance spreads to surrounding words in text.
 
 Importance ranking rules (hard-coded, exact):
   • No number  =  0   (baseline / zero)
@@ -19,11 +22,8 @@ Importance ranking rules (hard-coded, exact):
 
 from __future__ import annotations
 import re
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
-
-# ──────────────────────────────────────────────
-# 1. Basic arithmetic symbols
-# ──────────────────────────────────────────────
 
 EQUALS = "="
 PLUS = "+"
@@ -36,27 +36,14 @@ def apply_minus(a: float, b: float) -> float:
     return a - b
 
 def apply_equals_numeric(left, right) -> bool:
-    """Numeric check only."""
     return left == right
 
-# ──────────────────────────────────────────────
-# General "equals" rule (the one you asked for)
-# Left side equals right side — no matter what the content is.
-# ──────────────────────────────────────────────
-
-# Stores pairs: left equals right
-# We keep both directions so lookup is easy
 _equals_links: Dict[str, Set[str]] = {}
 
 def _norm(s: str) -> str:
     return s.strip().lower()
 
 def teach_equals(left: str, right: str):
-    """
-    Hard-coded meaning of = :
-    Whatever is on the left equals whatever is on the right.
-    Works for any text, not just numbers.
-    """
     l, r = _norm(left), _norm(right)
     if not l or not r:
         return
@@ -68,35 +55,19 @@ def teach_equals(left: str, right: str):
     _equals_links[r].add(l)
 
 def equals(left: str, right: str) -> bool:
-    """Return True if we know left equals right (directly)."""
     l, r = _norm(left), _norm(right)
     if l == r:
         return True
     return r in _equals_links.get(l, set())
 
 def what_equals(thing: str) -> List[str]:
-    """Return everything we know that equals this thing."""
     return sorted(_equals_links.get(_norm(thing), set()))
 
 def parse_equals_statement(text: str) -> Optional[Tuple[str, str]]:
-    """
-    Detect a simple statement of the form:
-        something = something_else
-    Returns (left, right) or None.
-    """
-    # Allow spaces around =
     m = re.match(r"^\s*(.+?)\s*=\s*(.+?)\s*$", text.strip())
     if not m:
         return None
-    left, right = m.group(1).strip(), m.group(2).strip()
-    # Avoid treating pure math like "2 + 3 = 5" as a general equals teach
-    # (those are handled separately). Only treat it as general equals
-    # when at least one side is not a plain number expression.
-    return left, right
-
-# ──────────────────────────────────────────────
-# 2. Numbers 1–10 with order
-# ──────────────────────────────────────────────
+    return m.group(1).strip(), m.group(2).strip()
 
 NUMBERS = {
     "1": 1, "2": 2, "3": 3, "4": 4, "5": 5,
@@ -116,24 +87,31 @@ def compare_numbers(a: int, b: int) -> str:
     return f"{a} equals {b}"
 
 # ──────────────────────────────────────────────
-# 3. Importance system  ∆word+5∆
+# Importance: ∆word+N∆  or  ∆word+N$∆
+# $ = context amplifier (spread to nearby words)
 # ──────────────────────────────────────────────
 
 ANNOTATION_RE = re.compile(r"∆([^∆]+)∆")
 
-def parse_importance(text: str) -> List[Tuple[str, int]]:
+def parse_importance(text: str) -> List[Tuple[str, int, bool]]:
+    """
+    Returns list of (phrase, score, context_spread).
+    context_spread True when $ is present (e.g. ∆hungry+8$∆).
+    """
     results = []
     for match in ANNOTATION_RE.finditer(text):
         content = match.group(1).strip()
-        m = re.search(r"([+-]\d+)\s*$", content)
+        spread = "$" in content
+        content_clean = content.replace("$", "").strip()
+        m = re.search(r"([+-]\d+)\s*$", content_clean)
         if m:
             score = int(m.group(1))
-            phrase = content[: m.start()].strip().lower()
+            phrase = content_clean[: m.start()].strip().lower()
             phrase = re.sub(r"\s*\+\s*", " ", phrase).strip()
-            results.append((phrase, score))
+            results.append((phrase, score, spread))
         else:
-            phrase = re.sub(r"\s*\+\s*", " ", content).strip().lower()
-            results.append((phrase, 0))
+            phrase = re.sub(r"\s*\+\s*", " ", content_clean).strip().lower()
+            results.append((phrase, 0, spread))
     return results
 
 def importance_rank(score: int) -> str:
@@ -164,21 +142,49 @@ class ImportanceEngine:
     def __init__(self):
         self.knowledge: Dict[str, int] = {}
         self.patterns: Dict[str, int] = {}
+        # words that should spread importance to neighbors
+        self.context_spread: Set[str] = set()
 
     def learn_from_text(self, text: str):
         items = parse_importance(text)
-        for phrase, score in items:
+        for phrase, score, spread in items:
             if phrase not in self.knowledge:
                 self.knowledge[phrase] = score
             else:
                 old = self.knowledge[phrase]
                 if (score > 0 and old <= 0) or (score == 0 and old < 0) or (score > old and (score > 0) == (old > 0)):
                     self.knowledge[phrase] = score
+            if spread:
+                self.context_spread.add(phrase)
+                # also mark individual tokens for single-word entries
+                for tok in phrase.split():
+                    self.context_spread.add(tok)
             words = phrase.split()
             if len(words) >= 2:
                 abstract = f"{words[0]}+{'+'.join(words[1:])}"
                 if abstract not in self.patterns or score > self.patterns[abstract]:
                     self.patterns[abstract] = score
+
+    def amplify_context(self, tokens: List[str], window: int = 2) -> Dict[str, int]:
+        """
+        Context Amplifier:
+        For any token marked with $, boost nearby tokens within `window`.
+        Returns token -> boosted importance map for this sequence.
+        """
+        n = len(tokens)
+        scores = [self.get_importance(t) for t in tokens]
+        boosted = scores[:]
+        for i, tok in enumerate(tokens):
+            key = tok.lower()
+            if key in self.context_spread or self.get_importance(key) >= 10:
+                base = max(scores[i], 1)
+                for j in range(max(0, i - window), min(n, i + window + 1)):
+                    if j == i:
+                        continue
+                    # neighbor gets a fraction of the spread source importance
+                    boost = max(1, base // 2)
+                    boosted[j] = max(boosted[j], boost)
+        return {tokens[i].lower(): boosted[i] for i in range(n)}
 
     def get_importance(self, phrase: str) -> int:
         return self.knowledge.get(phrase.lower().strip(), 0)
@@ -199,12 +205,25 @@ class ImportanceEngine:
 
     def explain(self, phrase: str) -> str:
         score = self.get_importance(phrase)
-        return f"∆{phrase}{score:+d}∆ → {importance_rank(score)}"
+        spread = " $" if phrase.lower() in self.context_spread else ""
+        return f"∆{phrase}{score:+d}{spread}∆ → {importance_rank(score)}"
+
+    def load_dictionary_file(self, path: str | Path) -> int:
+        """Load a full annotated dictionary file (every line ∆word+N∆ or ∆word+N$∆)."""
+        path = Path(path)
+        if not path.exists():
+            return 0
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        before = len(self.knowledge)
+        self.learn_from_text(text)
+        return len(self.knowledge) - before
 
     def status(self) -> str:
-        lines = ["Lloyd importance knowledge ( + > 0 > - ):"]
-        for p, s in sorted(self.knowledge.items(), key=lambda x: -x[1])[:15]:
-            lines.append(f"  ∆{p}{s:+d}∆")
+        lines = ["Lloyd importance knowledge ( + > 0 > - | $ = context spread ):"]
+        for p, s in sorted(self.knowledge.items(), key=lambda x: -x[1])[:20]:
+            mark = "$" if p in self.context_spread else ""
+            lines.append(f"  ∆{p}{s:+d}{mark}∆")
+        lines.append(f"total words known: {len(self.knowledge)} | context-spread tags: {len(self.context_spread)}")
         if self.patterns:
             lines.append("Abstract patterns:")
             for p, s in list(self.patterns.items())[:8]:
@@ -230,4 +249,8 @@ def demo_basic_math() -> str:
     checks.append(f"cat equals animal ? {equals('cat', 'animal')}")
     checks.append(f"dog equals animal ? {equals('dog', 'animal')}")
     checks.append(f"what equals animal? {what_equals('animal')}")
+    checks.append("--- context amplifier demo ---")
+    engine.learn_from_text("∆hungry+8$∆ ∆code+10$∆")
+    checks.append(f"hungry spread? {'hungry' in engine.context_spread}")
+    checks.append(f"code score={engine.get_importance('code')}")
     return "\n".join(checks)
