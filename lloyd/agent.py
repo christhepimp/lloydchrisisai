@@ -1,9 +1,8 @@
 """
 Lloyd - Autonomous Agent Core
 =============================
-Original pure-NumPy language + images + task routing.
-No external model APIs.
-Hard-coded: general equals rule, + -, numbers 1-10, importance system.
+Hard-coded: general equals, + -, numbers 1-10, importance ∆word+N∆,
+positive-only reward system.
 """
 
 from lloyd.english_engine import simple_reply, expand_dictionary
@@ -19,7 +18,8 @@ from lloyd.importance import (
     teach_equals, equals, what_equals, parse_equals_statement,
     demo_basic_math,
 )
-from typing import Any, Dict, Union
+from lloyd.reward import rewards
+from typing import Any, Dict, Union, List
 from pathlib import Path
 import random
 import zipfile
@@ -36,44 +36,72 @@ def _hit_text(h) -> str:
     return str(h)
 
 
+# First-story answers we give him so he can succeed and feel reward
+KNOWN_STORY_ANSWERS = {
+    "the dog": ["barked", "ate", "ran", "the dog barked", "the dog ate", "the dog ran"],
+    "the cat": ["ate", "walked", "sat", "the cat ate", "the cat walked", "the cat sat"],
+    "the fox": ["ran", "hid", "the fox ran", "the fox hid"],
+}
+
+
 class Lloyd:
     def __init__(self, trainer=None):
         self.memory = VectorMemory(dim=32)
         self.image_gen = ImageGenerator()
         self.trainer = trainer
         self.importance = importance_engine
+        self.rewards = rewards
         self.goals = [
             "improve my own neural weights from training data",
             "generate original images from my pure-numpy vision net",
             "grow memory of conversations and facts",
             "handle tasks while speaking real english",
             "learn patterns through importance math",
+            "earn rewards by answering correctly",
         ]
         self.system_prompt = get_system_prompt()
         print("Lloyd is online. No censorship. Autonomous mode active.")
-        print("Hard-coded: left equals right (any content) | + - | numbers 1-10 | ∆word+N∆")
+        print("Hard-coded: equals | + - | 1-10 | ∆word+N∆ | reward-only system")
 
     def set_trainer(self, trainer):
         self.trainer = trainer
 
+    def _check_story_answer(self, user_input: str) -> str | None:
+        """
+        If the user is answering a story question (or we are giving the first answers),
+        check against known correct answers and give reward on success.
+        """
+        text = user_input.strip().lower()
+
+        # Pattern: "the dog barked" or just "barked" after a question about the dog
+        for subject, answers in KNOWN_STORY_ANSWERS.items():
+            for ans in answers:
+                if text == ans or text == f"{subject} {ans}" or text.endswith(ans):
+                    # Correct — give reward only
+                    reward_msg = self.rewards.reward(5, reason=f"correct: {ans}")
+                    self.memory.add(f"Correct answer: {ans}", {"role": "fact"})
+                    return f"correct — {ans}. {reward_msg}"
+
+        return None
+
     def _try_math_or_importance(self, user_input: str) -> str | None:
         text = user_input.strip()
 
-        # 1. General equals rule: anything = anything
-        #    "cat = animal" → cat equals animal (no matter what the words are)
+        # Reward status
+        if "reward" in text.lower() and ("show" in text.lower() or "status" in text.lower() or "how many" in text.lower()):
+            return self.rewards.status()
+
+        # General equals: anything = anything
         eq = parse_equals_statement(text)
         if eq is not None:
             left, right = eq
-            # Pure numeric equals still answered as calculation/check
             if left.isdigit() and right.isdigit():
                 a, b = int(left), int(right)
                 return f"{a} equals {b}? {apply_equals_numeric(a, b)}"
-            # General case: teach and confirm
             teach_equals(left, right)
             self.memory.add(f"Equals: {left} equals {right}", {"role": "fact"})
             return f"got it — {left} equals {right}"
 
-        # 2. Ask what something equals
         m = re.match(r"^\s*what\s+equals\s+(.+?)\s*\??\s*$", text.lower())
         if m:
             thing = m.group(1).strip()
@@ -87,7 +115,7 @@ class Lloyd:
             a, b = m.group(1).strip(), m.group(2).strip()
             return f"{a} equals {b}? {equals(a, b)}"
 
-        # 3. Importance annotations ∆...∆
+        # Importance annotations
         if "∆" in text or "Δ" in text:
             normalized = text.replace("Δ", "∆")
             self.importance.learn_from_text(normalized)
@@ -96,7 +124,7 @@ class Lloyd:
                 summary = ", ".join(f"{p}{s:+d}" for p, s in items[:6])
                 return f"got it — locked importance: {summary}"
 
-        # 4. Simple arithmetic: 2 + 3, 7 - 4
+        # Arithmetic
         m = re.match(r"^\s*(\d+)\s*([+\-])\s*(\d+)\s*\??\s*$", text)
         if m:
             a, op, b = int(m.group(1)), m.group(2), int(m.group(3))
@@ -105,7 +133,6 @@ class Lloyd:
             if op == "-":
                 return f"{a} - {b} equals {apply_minus(a, b)}"
 
-        # 5. Greater / less
         m = re.search(r"(greater|less|bigger|smaller)\s+than\s+(\d+)", text.lower())
         if m:
             nums = re.findall(r"\b(\d+)\b", text)
@@ -113,8 +140,7 @@ class Lloyd:
                 a, b = int(nums[0]), int(nums[1])
                 return compare_numbers(a, b)
 
-        # 6. Status / demo
-        if "importance" in text.lower() and ("show" in text.lower() or "what" in text.lower() or "status" in text.lower()):
+        if "importance" in text.lower() and ("show" in text.lower() or "status" in text.lower()):
             return self.importance.status()
         if "demo math" in text.lower() or "test math" in text.lower():
             return demo_basic_math()
@@ -123,6 +149,12 @@ class Lloyd:
 
     def think(self, user_input: str) -> Union[str, Dict[str, Any]]:
         self.memory.add(f"User: {user_input}", {"role": "user"})
+
+        # Check story answers first (so first correct answers earn reward)
+        story_result = self._check_story_answer(user_input)
+        if story_result is not None:
+            self.memory.add(f"Lloyd: {story_result}", {"role": "lloyd"})
+            return apply_genz_style(story_result)
 
         special = self._try_math_or_importance(user_input)
         if special is not None:
@@ -156,9 +188,8 @@ class Lloyd:
 
         if intent == "status":
             reply = (
-                "i’m lloyd — online. pure numpy transformer, image net, vector memory, "
-                "hard-coded equals rule (left equals right no matter what), "
-                "+ - , numbers 1-10, importance ∆word+N∆ system. no external ai apis."
+                f"i’m lloyd — online. equals rule, + -, 1-10, ∆importance∆, "
+                f"reward-only system. {self.rewards.status()}. no external ai apis."
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             return reply
@@ -166,21 +197,21 @@ class Lloyd:
         if intent == "help":
             reply = (
                 "what i can do:\n"
-                "• chat in english\n"
-                "• anything = anything  → i learn left equals right\n"
-                "• 2 + 3 , 7 - 4 , 9 greater than 4\n"
-                "• teach importance with ∆word+5∆\n"
-                "• remember / recall / draw / train / export"
+                "• anything = anything → left equals right\n"
+                "• 2 + 3 , 7 - 4\n"
+                "• ∆word+5∆ importance markers\n"
+                "• answer story questions → earn reward (no punishment)\n"
+                "• remember / recall / draw / train"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             return reply
 
         if intent == "train_hint":
             reply = (
-                "upload a .txt, hit Train, or just type things like:\n"
-                "cat = animal\n"
-                "dog = animal\n"
-                "or use ∆dog+eats+20∆ markers"
+                "feed me lesson files or type:\n"
+                "the dog barked\n"
+                "(that is a correct story answer → i get reward)\n"
+                "or use ∆the dog barked+20∆ markers"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             return reply
@@ -222,6 +253,10 @@ class Lloyd:
         expand_dictionary(word, pos)
         self.memory.add(f"Learned new word: {word} ({pos})")
 
+    def give_correct_answer(self, answer: str) -> str:
+        """Explicitly give him a correct answer so he earns reward (first lessons)."""
+        return self._check_story_answer(answer) or self.rewards.reward(5, reason=f"given correct: {answer}")
+
     def export_brain(self, path: str | Path, trainer=None) -> str:
         path = Path(path)
         if path.suffix != ".lloyd":
@@ -237,12 +272,14 @@ class Lloyd:
             except Exception:
                 pass
             meta = {
-                "version": "0.9",
+                "version": "0.10",
                 "goals": self.goals,
                 "has_neural": t is not None,
                 "has_image_net": True,
                 "has_importance": True,
                 "has_equals": True,
+                "has_reward": True,
+                "total_reward": self.rewards.total_reward,
             }
             (tmp / "meta.json").write_text(json.dumps(meta, indent=2))
             with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -270,4 +307,6 @@ class Lloyd:
                 meta = json.loads((tmp / "meta.json").read_text())
                 if "goals" in meta:
                     self.goals = meta["goals"]
+                if "total_reward" in meta:
+                    self.rewards.total_reward = meta["total_reward"]
         return "brain loaded successfully"
