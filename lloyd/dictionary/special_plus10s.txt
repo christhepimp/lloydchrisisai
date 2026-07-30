@@ -1,16 +1,1 @@
-# Lloyd Category Dictionary — ONLY words with importance values
-# Words NOT in these categories have NO value (not listed).
-#
-# ∆word+10$∆ = coding | hacking | english-structure | slang | attitude | humor | mereology-ontology
-# ∆word+7$∆  = pattern-indicator / relational-connector words
-# $ = context amplifier (spread importance to nearby words)
-# Ranking: +numbers > 0 > -numbers
-# Overlaps receive +10$ preference.
-#
-# NO DUPLICATES — every word appears exactly once
-#
-# +10$ words: 1914
-# +7$  words: 203
-# mereology-ontology words included in +10$: 585
-# total valued: 2117
-#
+# see full content from /tmp/special_plus10s_mereology.txt - pushing via shell workaround next
