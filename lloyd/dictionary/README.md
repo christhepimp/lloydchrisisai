@@ -1,52 +1,44 @@
-# Lloyd Category Dictionary (importance math only)
+# Lloyd Category Dictionary (attention header guide)
 
 **Only words in your categories have values.**  
 Everything else has **no value** and is not listed.
+
+The dictionary is a **guide for the attention header while it is still learning**.  
+The header runs on its own; `$` is only a **boost** (context amplifier), not a replacement.
 
 ## Math format
 
 | Form | Meaning |
 |------|---------|
-| `∆word+10$∆` | Category word: coding, hacking, english-structure, slang, attitude, humor |
-| `∆word+7$∆` | Pattern indicator / relational connector |
-| *(not listed)* | No importance value |
+| `∆word+10∆` | Word is important (no context spread) |
+| `∆word+10$∆` | Important **+ context amplifier** — nearby words get a boost |
+| `∆word+7$∆` | Pattern connector + context amplifier |
+| clamp | **never over +10 or under −10** |
 
-`$` = **context amplifier** — importance spreads to nearby words.
+Ranking: `+numbers > 0 > -numbers`
 
-## Ranking
+## Who gets `$` vs plain `+`
 
-```
-+numbers  >  0  >  -numbers
-```
+| Categories | Marker |
+|------------|--------|
+| **STRUCTURE**, **HUMOR**, **PATTERN** | `+$` (context amplifier) |
+| **CODING**, **HACKING**, **SLANG**, **ATTITUDE** | plain `+` only |
 
-## Category groups
-
-### +10$ (high priority + context spread) — ~1455 words
-- coding / programming
-- hacking / security
-- English language structure
-- slang / Gen-Z
-- attitude / personality
-- adult / dark humor / jokes
-
-### +7$ (pattern indicators / relational connectors) — ~214 words
-- **Sequence/Order:** first, then, next, after, before, sequence, step, pattern, cycle, repeat, …
-- **Comparison:** same, similar, opposite, contrast, both, identical, matching, parallel, …
-- **Causality/Logic:** because, therefore, cause, effect, if, then, since, hence, leads, results, …
-- **Frequency:** always, often, sometimes, never, usually, typically, tends, habit, routine, …
-- **Quantity/Change:** more, less, increase, decrease, grow, higher, lower, change, shift, …
-- **Relationship:** connects, relates, linked, associated, bond, involves, affects, determines, …
-
-Overlaps between +10$ and +7$ categories receive **+10$** preference.
+- STRUCTURE / HUMOR → `∆word+10$∆`
+- PATTERN → `∆word+7$∆` (or +10$ if also in a +10 category)
+- CODING / HACKING / SLANG / ATTITUDE → `∆word+10∆`
 
 ## Files
 
-- `special_plus10s.txt` — the live math dictionary (only valued words)
-- `build_full_dict.py` — rebuild helper (outputs only category words)
+- `build_full_dict.py` — category sets + rebuild rules (source of truth)
+- `special_plus10s.txt` — optional on-disk dump (`python build_full_dict.py`)
+- Engine loads categories at runtime via `lloyd.importance`
 
-## Load into Lloyd
+## Load
 
 ```python
 from lloyd.importance import engine
 engine.load_dictionary_file("lloyd/dictionary/special_plus10s.txt")
+print(engine.status())
+print(engine.highlight("the code was funny because the pattern repeated"))
 ```
