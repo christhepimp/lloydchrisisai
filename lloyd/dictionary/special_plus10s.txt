@@ -1,1 +1,9 @@
-PLACEHOLDER
+# Lloyd Category Dictionary — ONLY words with importance values
+# Words NOT in these categories have NO value (not listed).
+#
+# ∆word+10$∆ = coding | hacking | english-structure | slang | attitude | humor
+# ∆word+7$∆  = pattern-indicator / relational-connector words
+# $ = context amplifier (spread importance to nearby words)
+# Ranking: +numbers > 0 > -numbers
+# Overlaps between +10$ and +7$ categories receive +10$ preference.
+#
