@@ -3,7 +3,7 @@ Lloyd - Autonomous Agent Core
 =============================
 Original pure-NumPy language + images + task routing.
 No external model APIs.
-Now also includes hard-coded basic math and importance engine.
+Hard-coded: general equals rule, + -, numbers 1-10, importance system.
 """
 
 from lloyd.english_engine import simple_reply, expand_dictionary
@@ -13,9 +13,10 @@ from lloyd.image_gen import ImageGenerator
 from lloyd.tasks import route
 from lloyd.importance import (
     engine as importance_engine,
-    apply_plus, apply_minus, apply_equals,
+    apply_plus, apply_minus, apply_equals_numeric,
     compare_numbers, number_value,
     compare_importance, parse_importance,
+    teach_equals, equals, what_equals, parse_equals_statement,
     demo_basic_math,
 )
 from typing import Any, Dict, Union
@@ -50,18 +51,44 @@ class Lloyd:
         ]
         self.system_prompt = get_system_prompt()
         print("Lloyd is online. No censorship. Autonomous mode active.")
-        print("Hard-coded: = + - | numbers 1-10 | importance ∆word+N∆ system")
+        print("Hard-coded: left equals right (any content) | + - | numbers 1-10 | ∆word+N∆")
 
     def set_trainer(self, trainer):
         self.trainer = trainer
 
     def _try_math_or_importance(self, user_input: str) -> str | None:
-        """Handle direct math questions and importance annotations."""
         text = user_input.strip()
 
-        # Learn any ∆...∆ annotations present in the message
+        # 1. General equals rule: anything = anything
+        #    "cat = animal" → cat equals animal (no matter what the words are)
+        eq = parse_equals_statement(text)
+        if eq is not None:
+            left, right = eq
+            # Pure numeric equals still answered as calculation/check
+            if left.isdigit() and right.isdigit():
+                a, b = int(left), int(right)
+                return f"{a} equals {b}? {apply_equals_numeric(a, b)}"
+            # General case: teach and confirm
+            teach_equals(left, right)
+            self.memory.add(f"Equals: {left} equals {right}", {"role": "fact"})
+            return f"got it — {left} equals {right}"
+
+        # 2. Ask what something equals
+        m = re.match(r"^\s*what\s+equals\s+(.+?)\s*\??\s*$", text.lower())
+        if m:
+            thing = m.group(1).strip()
+            linked = what_equals(thing)
+            if linked:
+                return f"{thing} equals: {', '.join(linked)}"
+            return f"i don’t know what equals {thing} yet"
+
+        m = re.match(r"^\s*does\s+(.+?)\s+equal\s+(.+?)\s*\??\s*$", text.lower())
+        if m:
+            a, b = m.group(1).strip(), m.group(2).strip()
+            return f"{a} equals {b}? {equals(a, b)}"
+
+        # 3. Importance annotations ∆...∆
         if "∆" in text or "Δ" in text:
-            # normalize greek delta to our marker
             normalized = text.replace("Δ", "∆")
             self.importance.learn_from_text(normalized)
             items = parse_importance(normalized)
@@ -69,18 +96,16 @@ class Lloyd:
                 summary = ", ".join(f"{p}{s:+d}" for p, s in items[:6])
                 return f"got it — locked importance: {summary}"
 
-        # Simple arithmetic: 2 + 3, 7 - 4, 5 = 5
-        m = re.match(r"^\s*(\d+)\s*([+\-=])\s*(\d+)\s*\??\s*$", text)
+        # 4. Simple arithmetic: 2 + 3, 7 - 4
+        m = re.match(r"^\s*(\d+)\s*([+\-])\s*(\d+)\s*\??\s*$", text)
         if m:
             a, op, b = int(m.group(1)), m.group(2), int(m.group(3))
             if op == "+":
-                return f"{a} + {b} = {apply_plus(a, b)}"
+                return f"{a} + {b} equals {apply_plus(a, b)}"
             if op == "-":
-                return f"{a} - {b} = {apply_minus(a, b)}"
-            if op == "=":
-                return f"{a} = {b} ? {apply_equals(a, b)}"
+                return f"{a} - {b} equals {apply_minus(a, b)}"
 
-        # Greater / less questions: is 9 greater than 4?
+        # 5. Greater / less
         m = re.search(r"(greater|less|bigger|smaller)\s+than\s+(\d+)", text.lower())
         if m:
             nums = re.findall(r"\b(\d+)\b", text)
@@ -88,11 +113,9 @@ class Lloyd:
                 a, b = int(nums[0]), int(nums[1])
                 return compare_numbers(a, b)
 
-        # Importance status
+        # 6. Status / demo
         if "importance" in text.lower() and ("show" in text.lower() or "what" in text.lower() or "status" in text.lower()):
             return self.importance.status()
-
-        # Demo of the hard-coded math
         if "demo math" in text.lower() or "test math" in text.lower():
             return demo_basic_math()
 
@@ -101,7 +124,6 @@ class Lloyd:
     def think(self, user_input: str) -> Union[str, Dict[str, Any]]:
         self.memory.add(f"User: {user_input}", {"role": "user"})
 
-        # 1. Try hard-coded math / importance first
         special = self._try_math_or_importance(user_input)
         if special is not None:
             self.memory.add(f"Lloyd: {special}", {"role": "lloyd"})
@@ -134,10 +156,9 @@ class Lloyd:
 
         if intent == "status":
             reply = (
-                "i’m lloyd — online. pure numpy transformer for language, "
-                "spatial image net for pixels, vector memory, task router, "
-                "hard-coded = + - and numbers 1-10, plus importance ∆word+N∆ system. "
-                "no external ai apis. original stack only."
+                "i’m lloyd — online. pure numpy transformer, image net, vector memory, "
+                "hard-coded equals rule (left equals right no matter what), "
+                "+ - , numbers 1-10, importance ∆word+N∆ system. no external ai apis."
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             return reply
@@ -145,23 +166,21 @@ class Lloyd:
         if intent == "help":
             reply = (
                 "what i can do:\n"
-                "• chat in english (rules + my trained weights)\n"
-                "• draw … — pure numpy images\n"
-                "• remember that … — store a fact\n"
-                "• what do you remember about …\n"
-                "• upload .txt + Train — grow my brain\n"
-                "• basic math: 2 + 3, 7 - 4, 9 greater than 4\n"
-                "• teach importance: send text with ∆word+5∆ markers\n"
-                "• Export / Import — move my .lloyd brain"
+                "• chat in english\n"
+                "• anything = anything  → i learn left equals right\n"
+                "• 2 + 3 , 7 - 4 , 9 greater than 4\n"
+                "• teach importance with ∆word+5∆\n"
+                "• remember / recall / draw / train / export"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             return reply
 
         if intent == "train_hint":
             reply = (
-                "upload a .txt with the style/facts you want, hit Train, "
-                "then keep chatting — my transformer updates for real. "
-                "you can also feed me lesson files that use ∆word+N∆ markers."
+                "upload a .txt, hit Train, or just type things like:\n"
+                "cat = animal\n"
+                "dog = animal\n"
+                "or use ∆dog+eats+20∆ markers"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             return reply
@@ -207,7 +226,6 @@ class Lloyd:
         path = Path(path)
         if path.suffix != ".lloyd":
             path = path.with_suffix(".lloyd")
-
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             self.memory.save(str(tmp / "memory.json"))
@@ -219,11 +237,12 @@ class Lloyd:
             except Exception:
                 pass
             meta = {
-                "version": "0.8",
+                "version": "0.9",
                 "goals": self.goals,
                 "has_neural": t is not None,
                 "has_image_net": True,
                 "has_importance": True,
+                "has_equals": True,
             }
             (tmp / "meta.json").write_text(json.dumps(meta, indent=2))
             with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
