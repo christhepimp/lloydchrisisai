@@ -1,20 +1,10 @@
 """
 Lloyd Importance + Attention Header
 ===================================
-TWO SEPARATE SYSTEMS:
-
-1) Attention header  — runs on its own. Never reads the dictionary.
-2) Dictionary boost  — after the header scores tokens, words that have
-   values in the dictionary get a boost (and $ spreads that boost nearby).
-
-Marker math (dictionary only):
-  ∆word+10∆   → boost this word
-  ∆word+10$∆  → boost this word + context amplifier on neighbors
-  clamp       → never over +10 or under -10
-
-Categories (see lloyd/dictionary/):
-  STRUCTURE | HUMOR | PATTERN           →  +$
-  CODING | HACKING | SLANG | ATTITUDE   →  plain +
+1) Attention header runs alone (never reads the dictionary).
+2) Dictionary boosts header scores for valued WORDS and PHRASES.
+   - plain +   : CODING | HACKING | SLANG | ATTITUDE
+   - +$        : STRUCTURE | HUMOR | PATTERN (+ context spread)
 """
 
 from __future__ import annotations
@@ -23,11 +13,10 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# ── marker patterns (dictionary file / lesson text only) ─────────
 _MARKER_RE = re.compile(
-    r"∆\s*<\s*([^∆+\-$\s]+)\s*([+-]\d+)\s*(\$?)\s*∆"
+    r"∆\s*<\s*([^∆+\-$]+?)\s*([+-]\d+)\s*(\$?)\s*∆"
     r"|"
-    r"∆\s*([^∆+\-$\s]+)\s*([+-]\d+)\s*(\$?)\s*∆",
+    r"∆\s*([^∆+\-$]+?)\s*([+-]\d+)\s*(\$?)\s*∆",
     re.UNICODE,
 )
 _EQUALS_RE = re.compile(
@@ -50,65 +39,49 @@ def _clamp(n: int) -> int:
 
 
 def parse_importance(text: str) -> List[Tuple[str, int, bool]]:
-    """Parse dictionary markers from text. Returns (word, score, has_dollar)."""
     found: List[Tuple[str, int, bool]] = []
     for m in _MARKER_RE.finditer(text.replace("Δ", "∆")):
         if m.group(1) is not None:
             word, score_s, dollar = m.group(1), m.group(2), m.group(3)
         else:
             word, score_s, dollar = m.group(4), m.group(5), m.group(6)
-        word = word.strip().lower()
+        word = " ".join(word.strip().lower().split())
         found.append((word, _clamp(int(score_s)), dollar == "$"))
     return found
 
 
-# =====================================================================
-# 1) ATTENTION HEADER — independent. Does NOT touch the dictionary.
-# =====================================================================
 class AttentionHeader:
-    """
-    Pure attention over tokens. No dictionary lookups.
+    """Pure attention. Never consults the dictionary."""
 
-    Simple original heuristic while the neural header is still learning:
-      - later tokens get a mild recency weight
-      - content-ish tokens (len > 2) get a base pulse
-      - question words / verbs get a small structural bump from shape only
-        (not from any external lexicon file)
-    """
-
-    # tiny built-in shape cues (NOT the category dictionary)
     _SHAPE_BUMP = {
         "what": 0.8, "who": 0.8, "why": 0.8, "how": 0.8, "where": 0.8, "when": 0.8,
         "is": 0.3, "are": 0.3, "was": 0.3, "were": 0.3, "do": 0.3, "does": 0.3,
     }
 
     def score(self, tokens: List[str]) -> List[float]:
-        """Return one attention weight per token. Dictionary is never consulted."""
         n = len(tokens)
         if n == 0:
             return []
         out = []
         for i, tok in enumerate(tokens):
             t = tok.lower()
-            # recency: 0..1 across the sequence
             recency = (i + 1) / n
-            # length pulse: short function-looking vs longer content
             length_pulse = 0.4 if len(t) <= 2 else min(1.2, 0.5 + len(t) * 0.06)
             shape = self._SHAPE_BUMP.get(t, 0.0)
-            w = 0.5 * recency + 0.35 * length_pulse + shape
-            out.append(float(w))
+            out.append(float(0.5 * recency + 0.35 * length_pulse + shape))
         return out
 
 
-# =====================================================================
-# 2) DICTIONARY — only boosts header scores for valued words
-# =====================================================================
 class ImportanceDictionary:
-    """Word → (score, has_dollar). Used only as a boost layer."""
+    """
+    Single words + multi-word phrases.
+    Only used to boost header scores — header never reads this.
+    """
 
     def __init__(self):
-        self.table: Dict[str, Tuple[int, bool]] = {}
+        self.table: Dict[str, Tuple[int, bool]] = {}  # key may contain spaces
         self._load_builtin_categories()
+        self._load_phrases()
         default = Path(__file__).parent / "dictionary" / "special_plus10s.txt"
         if default.exists():
             try:
@@ -124,6 +97,16 @@ class ImportanceDictionary:
                 score, use_dollar = bfd.score_and_dollar(w)
                 if score != 0:
                     self.table[w] = (_clamp(score), use_dollar)
+        except Exception:
+            pass
+
+    def _load_phrases(self):
+        try:
+            from lloyd.dictionary.phrases import PHRASES
+
+            for phrase, (score, dollar) in PHRASES.items():
+                key = " ".join(phrase.lower().split())
+                self.table[key] = (_clamp(score), dollar)
         except Exception:
             pass
 
@@ -160,14 +143,63 @@ class ImportanceDictionary:
     def get(self, word: str) -> Tuple[int, bool]:
         return self.table.get(word.lower().strip(), (0, False))
 
-    def status(self) -> str:
-        dollar_n = sum(1 for _, d in self.table.values() if d)
-        plain_n = len(self.table) - dollar_n
-        return (
-            f"dictionary: {len(self.table)} valued words | "
-            f"plain +: {plain_n} | +$ amplifier: {dollar_n} | "
-            f"clamp [{MIN_SCORE}, {MAX_SCORE}]"
+    def phrase_keys(self) -> List[str]:
+        return sorted(
+            (k for k in self.table if " " in k),
+            key=lambda s: len(s.split()),
+            reverse=True,
         )
+
+    def status(self) -> str:
+        words = sum(1 for k in self.table if " " not in k)
+        phrases = sum(1 for k in self.table if " " in k)
+        dollar_n = sum(1 for _, d in self.table.values() if d)
+        return (
+            f"dictionary: {words} words + {phrases} phrases | "
+            f"+$ amplifier entries: {dollar_n} | clamp [{MIN_SCORE}, {MAX_SCORE}]"
+        )
+
+
+def _match_spans(
+    tokens: List[str], dictionary: ImportanceDictionary
+) -> List[Tuple[int, int, int, bool]]:
+    """
+    Longest-first phrase/word match on token stream.
+    Returns list of (start_idx, end_idx_exclusive, score, has_dollar).
+    Non-overlapping; longer phrases win.
+    """
+    n = len(tokens)
+    covered = [False] * n
+    spans: List[Tuple[int, int, int, bool]] = []
+
+    # phrases first (longest already sorted in phrase_keys)
+    lower_tokens = [t.lower() for t in tokens]
+    for phrase in dictionary.phrase_keys():
+        parts = phrase.split()
+        plen = len(parts)
+        if plen == 0 or plen > n:
+            continue
+        sc, dol = dictionary.get(phrase)
+        if sc == 0:
+            continue
+        for i in range(0, n - plen + 1):
+            if any(covered[i : i + plen]):
+                continue
+            if lower_tokens[i : i + plen] == parts:
+                spans.append((i, i + plen, sc, dol))
+                for j in range(i, i + plen):
+                    covered[j] = True
+
+    # single words on remaining tokens
+    for i, tok in enumerate(lower_tokens):
+        if covered[i]:
+            continue
+        sc, dol = dictionary.get(tok)
+        if sc != 0:
+            spans.append((i, i + 1, sc, dol))
+            covered[i] = True
+
+    return spans
 
 
 def apply_dictionary_boost(
@@ -176,28 +208,24 @@ def apply_dictionary_boost(
     dictionary: ImportanceDictionary,
 ) -> List[float]:
     """
-    Dictionary boost layer.
-    Header weights come in untouched from AttentionHeader.
-    Only tokens present in the dictionary receive an additive boost.
-    $ markers also spread a fraction of their boost to neighbors.
+    Header weights in → boost only dictionary hits (words + phrases) → out.
+    $ spreads boost to neighboring tokens outside the matched span.
     """
     n = len(tokens)
     assert len(header_weights) == n
     out = [float(w) for w in header_weights]
-
-    # direct boosts from dictionary values
     direct = [0.0] * n
-    dollar_flags = [False] * n
-    for i, tok in enumerate(tokens):
-        sc, dol = dictionary.get(tok)
-        if sc != 0:
-            direct[i] = float(sc)
-            dollar_flags[i] = dol
-            out[i] += float(sc)
+    dollar_center = [False] * n
 
-    # context amplifier: $ spreads boost to surrounding words
-    for i, dol in enumerate(dollar_flags):
-        if not dol or direct[i] == 0:
+    for start, end, sc, dol in _match_spans(tokens, dictionary):
+        for i in range(start, end):
+            direct[i] += float(sc)
+            out[i] += float(sc)
+            if dol:
+                dollar_center[i] = True
+
+    for i in range(n):
+        if not dollar_center[i] or direct[i] == 0:
             continue
         spread = abs(direct[i]) * CONTEXT_BOOST
         sign = 1.0 if direct[i] > 0 else -1.0
@@ -211,15 +239,11 @@ def apply_dictionary_boost(
     return out
 
 
-# =====================================================================
-# Engine — wires header then dictionary boost (header never sees dict)
-# =====================================================================
 class ImportanceEngine:
     def __init__(self):
         self.header = AttentionHeader()
         self.dictionary = ImportanceDictionary()
 
-    # --- dictionary API (used by agent / training) ---
     def load_dictionary_file(self, path: str) -> int:
         return self.dictionary.load_dictionary_file(path)
 
@@ -227,36 +251,31 @@ class ImportanceEngine:
         return self.dictionary.learn_from_text(text)
 
     def score_word(self, word: str) -> Tuple[int, bool]:
-        """Dictionary value only (not header attention)."""
         return self.dictionary.get(word)
 
     def status(self) -> str:
-        return (
-            "attention header: independent (no dictionary) | "
-            + self.dictionary.status()
-        )
+        return "attention header: independent | " + self.dictionary.status()
 
-    # --- full pipeline ---
     def attend(self, text: str) -> List[Tuple[str, float, float, float]]:
-        """
-        Returns list of (token, header_weight, dict_boosted_weight, dict_score).
-        Header is computed first with zero knowledge of the dictionary.
-        """
         tokens = re.findall(r"[a-zA-Z0-9']+", text.lower())
         header_w = self.header.score(tokens)
         boosted = apply_dictionary_boost(tokens, header_w, self.dictionary)
+
+        # dict score per token (from spans)
+        dict_scores = [0.0] * len(tokens)
+        for start, end, sc, _dol in _match_spans(tokens, self.dictionary):
+            for i in range(start, end):
+                dict_scores[i] = float(sc)
+
         rows = []
         for i, tok in enumerate(tokens):
-            sc, _ = self.dictionary.get(tok)
-            rows.append((tok, header_w[i], boosted[i], float(sc)))
+            rows.append((tok, header_w[i], boosted[i], dict_scores[i]))
         return rows
 
     def attention_header(self, text: str) -> List[Tuple[str, float]]:
-        """Final weights after dictionary boost (for callers that want one list)."""
         return [(t, b) for t, _, b, _ in self.attend(text)]
 
     def header_only(self, text: str) -> List[Tuple[str, float]]:
-        """Pure header — dictionary never involved."""
         tokens = re.findall(r"[a-zA-Z0-9']+", text.lower())
         weights = self.header.score(tokens)
         return list(zip(tokens, weights))
@@ -274,11 +293,8 @@ class ImportanceEngine:
         return " ".join(parts)
 
 
-# Global engine
 engine = ImportanceEngine()
 
-
-# ── equals graph ─────────────────────────────────────────────────
 _EQUALS: Dict[str, set] = {}
 
 
@@ -340,14 +356,11 @@ def compare_numbers(a: int, b: int) -> str:
 
 
 def demo_basic_math() -> str:
-    sample = "the code was funny because the pattern repeated"
+    sample = "write code first then debug the code because the pattern repeats"
     lines = [
         f"2 + 3 equals {apply_plus(2, 3)}",
-        f"7 - 4 equals {apply_minus(7, 4)}",
-        f"5 equals 5? {apply_equals_numeric(5, 5)}",
-        compare_numbers(9, 3),
         engine.status(),
-        "header only:  " + " ".join(f"{t}={w:.1f}" for t, w in engine.header_only(sample)),
-        "after dict:   " + engine.highlight(sample),
+        "header only: " + " ".join(f"{t}={w:.1f}" for t, w in engine.header_only(sample)),
+        "after dict:  " + engine.highlight(sample),
     ]
     return "\n".join(lines)
