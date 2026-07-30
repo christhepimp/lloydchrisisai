@@ -1,8 +1,8 @@
 """
 Lloyd - Autonomous Agent Core
 =============================
-Hard-coded: general equals, + -, numbers 1-10, importance ∆word+N∆,
-positive-only reward system.
+Hard-coded: equals, + -, 1-10, importance, reward-only, self-reflection,
+interactive training loop (no PDFs required).
 """
 
 from lloyd.english_engine import simple_reply, expand_dictionary
@@ -13,13 +13,15 @@ from lloyd.tasks import route
 from lloyd.importance import (
     engine as importance_engine,
     apply_plus, apply_minus, apply_equals_numeric,
-    compare_numbers, number_value,
-    compare_importance, parse_importance,
+    compare_numbers,
+    parse_importance,
     teach_equals, equals, what_equals, parse_equals_statement,
     demo_basic_math,
 )
 from lloyd.reward import rewards
-from typing import Any, Dict, Union, List
+from lloyd.reflection import reflector
+from lloyd.training_loop import training
+from typing import Any, Dict, Union
 from pathlib import Path
 import random
 import zipfile
@@ -36,14 +38,6 @@ def _hit_text(h) -> str:
     return str(h)
 
 
-# First-story answers we give him so he can succeed and feel reward
-KNOWN_STORY_ANSWERS = {
-    "the dog": ["barked", "ate", "ran", "the dog barked", "the dog ate", "the dog ran"],
-    "the cat": ["ate", "walked", "sat", "the cat ate", "the cat walked", "the cat sat"],
-    "the fox": ["ran", "hid", "the fox ran", "the fox hid"],
-}
-
-
 class Lloyd:
     def __init__(self, trainer=None):
         self.memory = VectorMemory(dim=32)
@@ -51,47 +45,44 @@ class Lloyd:
         self.trainer = trainer
         self.importance = importance_engine
         self.rewards = rewards
+        self.reflector = reflector
+        self.training = training
         self.goals = [
             "improve my own neural weights from training data",
             "generate original images from my pure-numpy vision net",
             "grow memory of conversations and facts",
-            "handle tasks while speaking real english",
-            "learn patterns through importance math",
-            "earn rewards by answering correctly",
+            "learn patterns through importance + equals + reward",
+            "reflect when wrong so i notice what leads to the right answer",
         ]
         self.system_prompt = get_system_prompt()
         print("Lloyd is online. No censorship. Autonomous mode active.")
-        print("Hard-coded: equals | + - | 1-10 | ∆word+N∆ | reward-only system")
+        print("Hard-coded: equals | + - | 1-10 | ∆importance∆ | reward-only | self-reflection | training loop")
 
     def set_trainer(self, trainer):
         self.trainer = trainer
 
-    def _check_story_answer(self, user_input: str) -> str | None:
-        """
-        If the user is answering a story question (or we are giving the first answers),
-        check against known correct answers and give reward on success.
-        """
-        text = user_input.strip().lower()
-
-        # Pattern: "the dog barked" or just "barked" after a question about the dog
-        for subject, answers in KNOWN_STORY_ANSWERS.items():
-            for ans in answers:
-                if text == ans or text == f"{subject} {ans}" or text.endswith(ans):
-                    # Correct — give reward only
-                    reward_msg = self.rewards.reward(5, reason=f"correct: {ans}")
-                    self.memory.add(f"Correct answer: {ans}", {"role": "fact"})
-                    return f"correct — {ans}. {reward_msg}"
-
-        return None
-
-    def _try_math_or_importance(self, user_input: str) -> str | None:
+    def _try_special(self, user_input: str) -> str | None:
         text = user_input.strip()
+        lower = text.lower()
 
-        # Reward status
-        if "reward" in text.lower() and ("show" in text.lower() or "status" in text.lower() or "how many" in text.lower()):
+        # ── Training loop commands ──
+        if lower in ("start training", "start train", "begin training", "train loop"):
+            return self.training.start()
+
+        if lower in ("training status", "train status"):
+            return self.training.status()
+
+        # If we are inside the training loop waiting for an answer, treat input as the answer
+        if self.training.waiting_for_answer:
+            return self.training.submit_answer(text)
+
+        # ── Reward / reflection status ──
+        if "reward" in lower and any(w in lower for w in ("show", "status", "how many")):
             return self.rewards.status()
+        if "reflection" in lower or "reflect" in lower:
+            return self.reflector.status()
 
-        # General equals: anything = anything
+        # ── General equals ──
         eq = parse_equals_statement(text)
         if eq is not None:
             left, right = eq
@@ -102,7 +93,7 @@ class Lloyd:
             self.memory.add(f"Equals: {left} equals {right}", {"role": "fact"})
             return f"got it — {left} equals {right}"
 
-        m = re.match(r"^\s*what\s+equals\s+(.+?)\s*\??\s*$", text.lower())
+        m = re.match(r"^\s*what\s+equals\s+(.+?)\s*\??\s*$", lower)
         if m:
             thing = m.group(1).strip()
             linked = what_equals(thing)
@@ -110,12 +101,12 @@ class Lloyd:
                 return f"{thing} equals: {', '.join(linked)}"
             return f"i don’t know what equals {thing} yet"
 
-        m = re.match(r"^\s*does\s+(.+?)\s+equal\s+(.+?)\s*\??\s*$", text.lower())
+        m = re.match(r"^\s*does\s+(.+?)\s+equal\s+(.+?)\s*\??\s*$", lower)
         if m:
             a, b = m.group(1).strip(), m.group(2).strip()
             return f"{a} equals {b}? {equals(a, b)}"
 
-        # Importance annotations
+        # ── Importance markers ──
         if "∆" in text or "Δ" in text:
             normalized = text.replace("Δ", "∆")
             self.importance.learn_from_text(normalized)
@@ -124,7 +115,7 @@ class Lloyd:
                 summary = ", ".join(f"{p}{s:+d}" for p, s in items[:6])
                 return f"got it — locked importance: {summary}"
 
-        # Arithmetic
+        # ── Arithmetic ──
         m = re.match(r"^\s*(\d+)\s*([+\-])\s*(\d+)\s*\??\s*$", text)
         if m:
             a, op, b = int(m.group(1)), m.group(2), int(m.group(3))
@@ -133,16 +124,15 @@ class Lloyd:
             if op == "-":
                 return f"{a} - {b} equals {apply_minus(a, b)}"
 
-        m = re.search(r"(greater|less|bigger|smaller)\s+than\s+(\d+)", text.lower())
+        m = re.search(r"(greater|less|bigger|smaller)\s+than\s+(\d+)", lower)
         if m:
             nums = re.findall(r"\b(\d+)\b", text)
             if len(nums) >= 2:
-                a, b = int(nums[0]), int(nums[1])
-                return compare_numbers(a, b)
+                return compare_numbers(int(nums[0]), int(nums[1]))
 
-        if "importance" in text.lower() and ("show" in text.lower() or "status" in text.lower()):
+        if "importance" in lower and ("show" in lower or "status" in lower):
             return self.importance.status()
-        if "demo math" in text.lower() or "test math" in text.lower():
+        if "demo math" in lower or "test math" in lower:
             return demo_basic_math()
 
         return None
@@ -150,13 +140,7 @@ class Lloyd:
     def think(self, user_input: str) -> Union[str, Dict[str, Any]]:
         self.memory.add(f"User: {user_input}", {"role": "user"})
 
-        # Check story answers first (so first correct answers earn reward)
-        story_result = self._check_story_answer(user_input)
-        if story_result is not None:
-            self.memory.add(f"Lloyd: {story_result}", {"role": "lloyd"})
-            return apply_genz_style(story_result)
-
-        special = self._try_math_or_importance(user_input)
+        special = self._try_special(user_input)
         if special is not None:
             self.memory.add(f"Lloyd: {special}", {"role": "lloyd"})
             return apply_genz_style(special)
@@ -188,31 +172,28 @@ class Lloyd:
 
         if intent == "status":
             reply = (
-                f"i’m lloyd — online. equals rule, + -, 1-10, ∆importance∆, "
-                f"reward-only system. {self.rewards.status()}. no external ai apis."
+                f"i’m lloyd — online. equals, + -, 1-10, ∆importance∆, "
+                f"reward-only, self-reflection, training loop. "
+                f"{self.rewards.status()}. no external ai apis."
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             return reply
 
         if intent == "help":
             reply = (
-                "what i can do:\n"
-                "• anything = anything → left equals right\n"
-                "• 2 + 3 , 7 - 4\n"
-                "• ∆word+5∆ importance markers\n"
-                "• answer story questions → earn reward (no punishment)\n"
-                "• remember / recall / draw / train"
+                "commands:\n"
+                "• start training  → interactive pattern loop\n"
+                "• anything = anything\n"
+                "• ∆word+5∆ importance\n"
+                "• 2 + 3 / 7 - 4\n"
+                "• reward status / reflection\n"
+                "• remember / recall / draw"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             return reply
 
         if intent == "train_hint":
-            reply = (
-                "feed me lesson files or type:\n"
-                "the dog barked\n"
-                "(that is a correct story answer → i get reward)\n"
-                "or use ∆the dog barked+20∆ markers"
-            )
+            reply = "type: start training\nthat runs the live loop (free answers first, then pattern questions, reflection on wrong, reward on correct)"
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             return reply
 
@@ -253,10 +234,6 @@ class Lloyd:
         expand_dictionary(word, pos)
         self.memory.add(f"Learned new word: {word} ({pos})")
 
-    def give_correct_answer(self, answer: str) -> str:
-        """Explicitly give him a correct answer so he earns reward (first lessons)."""
-        return self._check_story_answer(answer) or self.rewards.reward(5, reason=f"given correct: {answer}")
-
     def export_brain(self, path: str | Path, trainer=None) -> str:
         path = Path(path)
         if path.suffix != ".lloyd":
@@ -272,13 +249,14 @@ class Lloyd:
             except Exception:
                 pass
             meta = {
-                "version": "0.10",
+                "version": "0.11",
                 "goals": self.goals,
                 "has_neural": t is not None,
-                "has_image_net": True,
                 "has_importance": True,
                 "has_equals": True,
                 "has_reward": True,
+                "has_reflection": True,
+                "has_training_loop": True,
                 "total_reward": self.rewards.total_reward,
             }
             (tmp / "meta.json").write_text(json.dumps(meta, indent=2))
