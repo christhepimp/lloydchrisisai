@@ -1,45 +1,50 @@
-# Lloyd Annotated Dictionary (SCOWL complete copy)
+# Lloyd Category Dictionary (importance math only)
 
-This is a **complete rewritten copy** of SCOWL 2020.12.07 English word lists
-(levels 10–70, american + english), with Lloyd importance math on **every word**.
+**Only words in your categories have values.**  
+Everything else has **no value** and is not listed.
 
 ## Math format
 
 | Form | Meaning |
 |------|---------|
-| `∆word+N∆` | Word has importance **N** |
-| `∆word+N$∆` | Word has importance **N** **and** context-spread (`$`) to nearby words |
+| `∆word+10$∆` | Category word: coding, hacking, english-structure, slang, attitude, humor |
+| `∆word+7$∆` | Pattern indicator / relational connector |
+| *(not listed)* | No importance value |
 
-## Ranking (hard-coded in Lloyd)
+`$` = **context amplifier** — importance spreads to nearby words.
+
+## Ranking
 
 ```
-+numbers  >  0 (no number)  >  -numbers
++numbers  >  0  >  -numbers
 ```
 
-## Category boosts → `∆word+10$∆`
+## Category groups
 
-These categories get **+10** importance **and** context amplifier `$`:
-
+### +10$ (high priority + context spread)
 - coding / programming
 - hacking / security
-- English language structure (grammar, function words)
+- English language structure
 - slang / Gen-Z
 - attitude / personality
-- adult humor, dark humor, jokes
+- adult / dark humor / jokes
 
-All other SCOWL words → `∆word+1∆`
+### +7$ (pattern indicators / relational connectors)
+- **Sequence/Order:** first, then, next, after, before, sequence, step, pattern, cycle, …
+- **Comparison:** same, similar, opposite, contrast, both, identical, matching, parallel, …
+- **Causality/Logic:** because, therefore, cause, effect, if, then, since, hence, leads to, …
+- **Frequency:** always, often, sometimes, never, usually, typically, tends to, habit, …
+- **Quantity/Change:** more, less, increase, decrease, grow, higher, lower, change, shift, …
+- **Relationship:** connects, relates, linked, associated, bond, involves, affects, determines, …
 
 ## Files
 
-- `lloyd_annotated_dictionary.txt` — full single file (~2MB, 111k+ words)
-- `full/part_XX.txt` — same content split for easier handling
-- `special_plus10s.txt` — only the +10$ category words
-
-## Source
-
-SCOWL 2020.12.07 — free to use/modify/distribute (Kevin Atkinson et al.).
+- `special_plus10s.txt` — the live math dictionary (only valued words)
+- `build_full_dict.py` — rebuild helper (outputs only category words)
 
 ## Load into Lloyd
 
-Lloyd’s importance engine parses every `∆...∆` marker.
-The `$` flag enables context spreading before attention.
+```python
+from lloyd.importance import engine
+engine.load_dictionary_file("lloyd/dictionary/special_plus10s.txt")
+```
