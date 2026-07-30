@@ -2,47 +2,35 @@
 Lloyd Context Amplifier (own program)
 =====================================
 Holds the category dictionary (words + phrases).
-Communicates with the attention header by reading the header's scores,
-then boosting words/phrases the header already put value on when they
-appear in the dictionary.
+Produces an importance bias injected into REAL multi-head attention
+(TinyTransformer) — not a fake header.
 
-This is NOT a digit. "$" on a dictionary entry only means "also boost
-neighbors." The amplifier itself is this module.
-
-Math on dictionary entries:
+Math:
   plain +   CODING | HACKING | SLANG | ATTITUDE
-  +$        STRUCTURE | HUMOR | PATTERN  (neighbor spill on)
+  +$        STRUCTURE | HUMOR | PATTERN (neighbor spill)
 
-Boost strength (easy to change later):
-  DICTIONARY_BOOST_PERCENT = 68  → +68% on header score for full +10 hits
+DICTIONARY_BOOST_PERCENT = 68  (easy to change)
 """
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
-from lloyd.attention_header import AttentionHeader, header as default_header
+import numpy as np
 
 MIN_SCORE = -10
 MAX_SCORE = 10
-
-# TUNABLE — main boost the amplifier applies to header scores
 DICTIONARY_BOOST_PERCENT = 68
-
-# Neighbor spill when dictionary entry uses $ (context spread)
 CONTEXT_RADIUS = 2
 CONTEXT_SPILL = 0.35
+_LOGIT_SCALE = 4.0
 
 _MARKER_RE = re.compile(
     r"∆\s*<\s*([^∆+\-$]+?)\s*([+-]\d+)\s*(\$?)\s*∆"
     r"|"
     r"∆\s*([^∆+\-$]+?)\s*([+-]\d+)\s*(\$?)\s*∆",
-    re.UNICODE,
-)
-_EQUALS_RE = re.compile(
-    r"∆\s*([^=∆]+?)\s*=\s*([^∆]+?)\s*∆",
     re.UNICODE,
 )
 
@@ -63,19 +51,7 @@ def parse_importance(text: str) -> List[Tuple[str, int, bool]]:
     return found
 
 
-def _boost_factor(dict_score: int) -> float:
-    if dict_score == 0:
-        return 1.0
-    intensity = abs(dict_score) / float(MAX_SCORE)
-    delta = (DICTIONARY_BOOST_PERCENT / 100.0) * intensity
-    if dict_score > 0:
-        return 1.0 + delta
-    return max(0.0, 1.0 - delta)
-
-
 class Dictionary:
-    """Category dictionary owned by the context amplifier."""
-
     def __init__(self):
         self.table: Dict[str, Tuple[int, bool]] = {}
         self._load_words()
@@ -156,52 +132,11 @@ class Dictionary:
         )
 
 
-def _match_spans(
-    tokens: List[str], dictionary: Dictionary
-) -> List[Tuple[int, int, int, bool]]:
-    n = len(tokens)
-    covered = [False] * n
-    spans: List[Tuple[int, int, int, bool]] = []
-    lower = [t.lower() for t in tokens]
-
-    for phrase in dictionary.phrase_keys():
-        parts = phrase.split()
-        plen = len(parts)
-        if plen == 0 or plen > n:
-            continue
-        sc, dol = dictionary.get(phrase)
-        if sc == 0:
-            continue
-        for i in range(0, n - plen + 1):
-            if any(covered[i : i + plen]):
-                continue
-            if lower[i : i + plen] == parts:
-                spans.append((i, i + plen, sc, dol))
-                for j in range(i, i + plen):
-                    covered[j] = True
-
-    for i, tok in enumerate(lower):
-        if covered[i]:
-            continue
-        sc, dol = dictionary.get(tok)
-        if sc != 0:
-            spans.append((i, i + 1, sc, dol))
-            covered[i] = True
-    return spans
-
-
 class ContextAmplifier:
-    """
-    Own program:
-      - holds the dictionary
-      - reads attention-header scores
-      - boosts scores for dictionary hits
-      - optional $ neighbor spill
-    """
+    """Owns dictionary; builds multi-head attention bias."""
 
-    def __init__(self, attn_header: Optional[AttentionHeader] = None):
+    def __init__(self):
         self.dictionary = Dictionary()
-        self.header = attn_header or default_header
 
     def load_dictionary_file(self, path: str) -> int:
         return self.dictionary.load_file(path)
@@ -212,82 +147,94 @@ class ContextAmplifier:
     def score_word(self, word: str) -> Tuple[int, bool]:
         return self.dictionary.get(word)
 
-    def boost(
-        self,
-        tokens: List[str],
-        header_weights: List[float],
-    ) -> List[float]:
-        """
-        Communicate with header output: take header weights, return boosted.
-        Only dictionary-valued words/phrases get the % boost.
-        """
+    def _match_token_spans(self, tokens: List[str]) -> List[Tuple[int, int, int, bool]]:
         n = len(tokens)
-        assert len(header_weights) == n
-        out = [float(w) for w in header_weights]
-        deltas = [0.0] * n
-        dollar_center = [False] * n
+        covered = [False] * n
+        spans: List[Tuple[int, int, int, bool]] = []
+        lower = [t.lower() for t in tokens]
 
-        for start, end, sc, dol in _match_spans(tokens, self.dictionary):
-            factor = _boost_factor(sc)
-            for i in range(start, end):
-                old = out[i]
-                new = old * factor
-                deltas[i] += new - old
-                out[i] = new
-                if dol:
-                    dollar_center[i] = True
-
-        for i in range(n):
-            if not dollar_center[i] or deltas[i] == 0:
+        for phrase in self.dictionary.phrase_keys():
+            parts = phrase.split()
+            plen = len(parts)
+            if plen == 0 or plen > n:
                 continue
+            sc, dol = self.dictionary.get(phrase)
+            if sc == 0:
+                continue
+            for i in range(0, n - plen + 1):
+                if any(covered[i : i + plen]):
+                    continue
+                if lower[i : i + plen] == parts:
+                    spans.append((i, i + plen, sc, dol))
+                    for j in range(i, i + plen):
+                        covered[j] = True
+
+        for i, tok in enumerate(lower):
+            if covered[i]:
+                continue
+            sc, dol = self.dictionary.get(tok)
+            if sc != 0:
+                spans.append((i, i + 1, sc, dol))
+                covered[i] = True
+        return spans
+
+    def bias_for_text(self, text: str) -> np.ndarray:
+        """Char-aligned bias for multi-head attention logits."""
+        if not text:
+            return np.zeros(0, dtype=np.float64)
+
+        token_matches = list(re.finditer(r"[a-zA-Z0-9']+", text))
+        tokens = [m.group(0) for m in token_matches]
+        n = len(text)
+        raw = np.zeros(n, dtype=np.float64)
+        spans = self._match_token_spans(tokens)
+
+        for start_t, end_t, sc, dol in spans:
+            intensity = (abs(sc) / float(MAX_SCORE)) * (DICTIONARY_BOOST_PERCENT / 100.0)
+            sign = 1.0 if sc >= 0 else -1.0
+            strength = sign * intensity * _LOGIT_SCALE
+            for ti in range(start_t, end_t):
+                m = token_matches[ti]
+                raw[m.start() : m.end()] = strength
+
+        out = raw.copy()
+        for start_t, end_t, sc, dol in spans:
+            if not dol:
+                continue
+            intensity = (abs(sc) / float(MAX_SCORE)) * (DICTIONARY_BOOST_PERCENT / 100.0)
+            sign = 1.0 if sc >= 0 else -1.0
+            strength = sign * intensity * _LOGIT_SCALE
             for d in range(1, CONTEXT_RADIUS + 1):
-                spill = deltas[i] * CONTEXT_SPILL * (1.0 / d)
-                if i - d >= 0:
-                    out[i - d] += spill
-                if i + d < n:
-                    out[i + d] += spill
+                spill = strength * CONTEXT_SPILL * (1.0 / d)
+                for ti in (start_t - d, end_t - 1 + d):
+                    if 0 <= ti < len(token_matches):
+                        m = token_matches[ti]
+                        out[m.start() : m.end()] += spill
         return out
 
-    def run(self, text: str) -> List[Tuple[str, float, float, float]]:
-        """
-        Full pipeline this program owns the second half of:
-          1) ask header to score (header stays independent)
-          2) amplifier boosts using dictionary
-        Returns (token, header_score, boosted_score, dict_value).
-        """
-        tokens = self.header.tokenize(text)
-        header_w = self.header.score_tokens(tokens)
-        boosted = self.boost(tokens, header_w)
-
-        dict_scores = [0.0] * len(tokens)
-        for start, end, sc, _dol in _match_spans(tokens, self.dictionary):
-            for i in range(start, end):
-                dict_scores[i] = float(sc)
-
-        return [
-            (tok, header_w[i], boosted[i], dict_scores[i])
-            for i, tok in enumerate(tokens)
-        ]
+    def run_report(self, text: str) -> str:
+        tokens = re.findall(r"[a-zA-Z0-9']+", text.lower())
+        spans = self._match_token_spans(tokens)
+        if not spans:
+            return "no dictionary hits — multi-head runs unboosted"
+        parts = []
+        for s, e, sc, dol in spans:
+            phrase = " ".join(tokens[s:e])
+            parts.append(f"{phrase}({sc:+d}{' $' if dol else ''})")
+        bias = self.bias_for_text(text)
+        peak = float(np.max(np.abs(bias))) if bias.size else 0.0
+        return (
+            f"amplifier → multi-head bias | boost={DICTIONARY_BOOST_PERCENT}% | "
+            f"peak_logit_bias={peak:.2f}\n"
+            + ", ".join(parts)
+        )
 
     def status(self) -> str:
         return (
-            f"context amplifier online | "
+            f"context amplifier → multi-head attention | "
             f"DICTIONARY_BOOST_PERCENT={DICTIONARY_BOOST_PERCENT} | "
             + self.dictionary.status()
         )
 
-    def highlight(self, text: str) -> str:
-        rows = self.run(text)
-        if not rows:
-            return "(empty)"
-        parts = []
-        for tok, h, b, d in rows:
-            if abs(b - h) < 0.05 and abs(h) < 0.8:
-                parts.append(tok)
-            else:
-                parts.append(f"{tok}[h={h:.1f}→{b:.1f}]")
-        return " ".join(parts)
 
-
-# Global context amplifier instance (holds the dictionary)
 amplifier = ContextAmplifier()
