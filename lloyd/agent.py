@@ -1,9 +1,8 @@
 """
 Lloyd - Autonomous Agent Core
 =============================
-Attention header runs first (alone).
-Dictionary boosts only valued words afterward.
-Also: equals, + -, importance markers, reward, reflection, training loop.
+Context amplifier holds the dictionary and biases REAL multi-head attention.
+No fake attention header.
 """
 
 from lloyd.english_engine import simple_reply, expand_dictionary
@@ -27,7 +26,7 @@ from lloyd.importance import (
 from lloyd.reward import rewards
 from lloyd.reflection import reflector
 from lloyd.training_loop import training
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, Union
 from pathlib import Path
 import random
 import zipfile
@@ -53,7 +52,7 @@ class Lloyd:
         self.rewards = rewards
         self.reflector = reflector
         self.training = training
-        self.last_attention: List[Tuple[str, float, float, float]] = []
+        self.last_amp_report = ""
         self.goals = [
             "improve my own neural weights from training data",
             "generate original images from my pure-numpy vision net",
@@ -64,45 +63,19 @@ class Lloyd:
         self.system_prompt = get_system_prompt()
         print("Lloyd is online. No censorship. Autonomous mode active.")
         print(
-            "Pipeline: attention header (solo) → dictionary boost on valued words | "
+            "Pipeline: context amplifier → multi-head attention bias | "
             "equals | + - | reward | reflection | training loop"
         )
 
     def set_trainer(self, trainer):
         self.trainer = trainer
 
-    def _run_attention(self, text: str) -> List[Tuple[str, float, float, float]]:
-        """
-        1) Header scores the word group alone.
-        2) Dictionary boosts only words that have values (+ / +$).
-        Stores result on self.last_attention.
-        """
-        rows = self.importance.attend(text)
-        self.last_attention = rows
-        return rows
-
-    def _top_focus(self, rows: List[Tuple[str, float, float, float]], k: int = 5) -> List[str]:
-        """Highest final (boosted) weights — what Lloyd is focusing on."""
-        if not rows:
-            return []
-        ranked = sorted(rows, key=lambda r: r[2], reverse=True)
-        return [t for t, _h, _b, _d in ranked[:k]]
-
-    def _format_attention(self, rows: List[Tuple[str, float, float, float]]) -> str:
-        if not rows:
-            return "no tokens"
-        lines = ["token | header | after_dict_boost | dict_value"]
-        for tok, h, b, d in rows:
-            flag = ""
-            if d != 0:
-                flag = f"  ← dict {d:+.0f}"
-                sc, dol = self.importance.score_word(tok)
-                if dol:
-                    flag += "$"
-            lines.append(f"{tok} | {h:.2f} | {b:.2f} | {d:.0f}{flag}")
-        focus = self._top_focus(rows, 5)
-        lines.append("focus: " + ", ".join(focus))
-        return "\n".join(lines)
+    def _amp(self, text: str) -> str:
+        report = self.importance.attend(text)
+        if not isinstance(report, str):
+            report = str(report)
+        self.last_amp_report = report
+        return report
 
     def _try_special(self, user_input: str) -> str | None:
         text = user_input.strip()
@@ -122,35 +95,32 @@ class Lloyd:
         if "reflection" in lower or ("reflect" in lower and "status" in lower):
             return self.reflector.status()
 
-        # Show attention pipeline on demand
         if any(
             p in lower
             for p in (
                 "show attention",
                 "attention status",
                 "attention map",
-                "show header",
-                "header status",
+                "show amplifier",
+                "amplifier status",
             )
         ):
-            target = user_input
+            target = text
             for p in (
                 "show attention",
                 "attention status",
                 "attention map",
-                "show header",
-                "header status",
+                "show amplifier",
+                "amplifier status",
             ):
                 if p in lower:
                     target = re.sub(re.escape(p), "", text, flags=re.I).strip(" :-")
                     break
             if not target:
-                target = "the code was funny because the pattern repeated"
-            rows = self._run_attention(target)
+                target = "write code first then debug the code because the pattern repeats"
             return (
-                "attention header runs first (no dictionary).\n"
-                "dictionary only boosts words that have values.\n\n"
-                + self._format_attention(rows)
+                "context amplifier → real multi-head attention bias\n\n"
+                + self._amp(target)
             )
 
         eq = parse_equals_statement(text)
@@ -181,7 +151,6 @@ class Lloyd:
             self.importance.learn_from_text(normalized)
             items = parse_importance(normalized)
             if items:
-                # items are (word, score, dollar)
                 summary = ", ".join(
                     f"{w}{s:+d}{' $' if d else ''}" for w, s, d in items[:8]
                 )
@@ -211,10 +180,8 @@ class Lloyd:
     def think(self, user_input: str) -> Union[str, Dict[str, Any]]:
         self.memory.add(f"User: {user_input}", {"role": "user"})
 
-        # ── ALWAYS: header alone → dictionary boost on valued words ──
-        attn_rows = self._run_attention(user_input)
-        focus_words = self._top_focus(attn_rows, k=5)
-        focus_query = " ".join(focus_words) if focus_words else user_input
+        # Amplifier prepares multi-head bias for this utterance
+        self._amp(user_input)
 
         special = self._try_special(user_input)
         if special is not None:
@@ -237,7 +204,7 @@ class Lloyd:
             return apply_genz_style(reply)
 
         if intent == "recall":
-            hits = self.memory.search(payload or focus_query, top_k=4)
+            hits = self.memory.search(payload or user_input, top_k=4)
             if not hits:
                 reply = "my memory’s blank on that rn — teach me and i’ll keep it"
             else:
@@ -248,7 +215,7 @@ class Lloyd:
 
         if intent == "status":
             reply = (
-                f"i’m lloyd — online. attention header → dictionary boost. "
+                f"i’m lloyd — online. context amplifier → multi-head attention. "
                 f"{self.importance.status()}. {self.rewards.status()}."
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
@@ -257,7 +224,7 @@ class Lloyd:
         if intent == "help":
             reply = (
                 "commands:\n"
-                "• show attention <text>  → header then dict boost\n"
+                "• show attention <text>  → amplifier multi-head bias report\n"
                 "• start training\n"
                 "• anything = anything\n"
                 "• ∆word+10∆ / ∆word+10$∆\n"
@@ -276,10 +243,10 @@ class Lloyd:
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             return reply
 
-        # Chat path — memory search biased toward focus words from attention pipeline
         reply = None
         if self.trainer is not None:
             try:
+                # generate_reply feeds amplifier bias into multi-head
                 neural = self.trainer.generate_reply(user_input, max_new=72)
                 if neural and len(neural) > 8:
                     letters = sum(ch.isalpha() for ch in neural)
@@ -289,15 +256,11 @@ class Lloyd:
                 reply = None
 
         if not reply:
-            hits = self.memory.search(focus_query, top_k=2)
+            hits = self.memory.search(user_input, top_k=2)
             base = simple_reply(user_input)
-            # If dictionary boosted anything, lightly surface focus
-            boosted = [t for t, h, b, d in attn_rows if b > h + 0.5]
             if hits and random.random() < 0.5:
                 tip = _hit_text(hits[0])
                 reply = base + f" (side note from memory: {tip[:80]})"
-            elif boosted and random.random() < 0.35:
-                reply = base + f" (locked on: {', '.join(boosted[:4])})"
             else:
                 reply = base
 
@@ -333,11 +296,11 @@ class Lloyd:
             except Exception:
                 pass
             meta = {
-                "version": "0.12",
+                "version": "0.13",
                 "goals": self.goals,
                 "has_neural": t is not None,
-                "has_attention_header": True,
-                "has_dictionary_boost": True,
+                "has_context_amplifier": True,
+                "has_multihead_bias": True,
                 "has_equals": True,
                 "has_reward": True,
                 "has_reflection": True,
