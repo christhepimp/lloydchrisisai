@@ -3,6 +3,7 @@ Lloyd - Autonomous Agent Core
 =============================
 Original pure-NumPy language + images + task routing.
 No external model APIs.
+Now also includes hard-coded basic math and importance engine.
 """
 
 from lloyd.english_engine import simple_reply, expand_dictionary
@@ -10,12 +11,20 @@ from lloyd.personality import get_system_prompt, apply_genz_style
 from lloyd.memory import VectorMemory
 from lloyd.image_gen import ImageGenerator
 from lloyd.tasks import route
+from lloyd.importance import (
+    engine as importance_engine,
+    apply_plus, apply_minus, apply_equals,
+    compare_numbers, number_value,
+    compare_importance, parse_importance,
+    demo_basic_math,
+)
 from typing import Any, Dict, Union
 from pathlib import Path
 import random
 import zipfile
 import json
 import tempfile
+import re
 
 
 def _hit_text(h) -> str:
@@ -31,20 +40,73 @@ class Lloyd:
         self.memory = VectorMemory(dim=32)
         self.image_gen = ImageGenerator()
         self.trainer = trainer
+        self.importance = importance_engine
         self.goals = [
             "improve my own neural weights from training data",
             "generate original images from my pure-numpy vision net",
             "grow memory of conversations and facts",
             "handle tasks while speaking real english",
+            "learn patterns through importance math",
         ]
         self.system_prompt = get_system_prompt()
         print("Lloyd is online. No censorship. Autonomous mode active.")
+        print("Hard-coded: = + - | numbers 1-10 | importance ∆word+N∆ system")
 
     def set_trainer(self, trainer):
         self.trainer = trainer
 
+    def _try_math_or_importance(self, user_input: str) -> str | None:
+        """Handle direct math questions and importance annotations."""
+        text = user_input.strip()
+
+        # Learn any ∆...∆ annotations present in the message
+        if "∆" in text or "Δ" in text:
+            # normalize greek delta to our marker
+            normalized = text.replace("Δ", "∆")
+            self.importance.learn_from_text(normalized)
+            items = parse_importance(normalized)
+            if items:
+                summary = ", ".join(f"{p}{s:+d}" for p, s in items[:6])
+                return f"got it — locked importance: {summary}"
+
+        # Simple arithmetic: 2 + 3, 7 - 4, 5 = 5
+        m = re.match(r"^\s*(\d+)\s*([+\-=])\s*(\d+)\s*\??\s*$", text)
+        if m:
+            a, op, b = int(m.group(1)), m.group(2), int(m.group(3))
+            if op == "+":
+                return f"{a} + {b} = {apply_plus(a, b)}"
+            if op == "-":
+                return f"{a} - {b} = {apply_minus(a, b)}"
+            if op == "=":
+                return f"{a} = {b} ? {apply_equals(a, b)}"
+
+        # Greater / less questions: is 9 greater than 4?
+        m = re.search(r"(greater|less|bigger|smaller)\s+than\s+(\d+)", text.lower())
+        if m:
+            nums = re.findall(r"\b(\d+)\b", text)
+            if len(nums) >= 2:
+                a, b = int(nums[0]), int(nums[1])
+                return compare_numbers(a, b)
+
+        # Importance status
+        if "importance" in text.lower() and ("show" in text.lower() or "what" in text.lower() or "status" in text.lower()):
+            return self.importance.status()
+
+        # Demo of the hard-coded math
+        if "demo math" in text.lower() or "test math" in text.lower():
+            return demo_basic_math()
+
+        return None
+
     def think(self, user_input: str) -> Union[str, Dict[str, Any]]:
         self.memory.add(f"User: {user_input}", {"role": "user"})
+
+        # 1. Try hard-coded math / importance first
+        special = self._try_math_or_importance(user_input)
+        if special is not None:
+            self.memory.add(f"Lloyd: {special}", {"role": "lloyd"})
+            return apply_genz_style(special)
+
         decision = route(user_input)
         intent = decision["intent"]
         payload = decision.get("payload", user_input)
@@ -73,7 +135,8 @@ class Lloyd:
         if intent == "status":
             reply = (
                 "i’m lloyd — online. pure numpy transformer for language, "
-                "spatial image net for pixels, vector memory, task router. "
+                "spatial image net for pixels, vector memory, task router, "
+                "hard-coded = + - and numbers 1-10, plus importance ∆word+N∆ system. "
                 "no external ai apis. original stack only."
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
@@ -87,6 +150,8 @@ class Lloyd:
                 "• remember that … — store a fact\n"
                 "• what do you remember about …\n"
                 "• upload .txt + Train — grow my brain\n"
+                "• basic math: 2 + 3, 7 - 4, 9 greater than 4\n"
+                "• teach importance: send text with ∆word+5∆ markers\n"
                 "• Export / Import — move my .lloyd brain"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
@@ -96,7 +161,7 @@ class Lloyd:
             reply = (
                 "upload a .txt with the style/facts you want, hit Train, "
                 "then keep chatting — my transformer updates for real. "
-                "export the .lloyd file when you want to move me."
+                "you can also feed me lesson files that use ∆word+N∆ markers."
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             return reply
@@ -154,10 +219,11 @@ class Lloyd:
             except Exception:
                 pass
             meta = {
-                "version": "0.7",
+                "version": "0.8",
                 "goals": self.goals,
                 "has_neural": t is not None,
                 "has_image_net": True,
+                "has_importance": True,
             }
             (tmp / "meta.json").write_text(json.dumps(meta, indent=2))
             with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
