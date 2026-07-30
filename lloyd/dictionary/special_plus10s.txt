@@ -1,9 +1,12 @@
-# Lloyd Category Dictionary — ONLY words with importance values
-# Words NOT in these categories have NO value (not listed).
+# Lloyd Category Dictionary
+# Built from category seeds + SCOWL exact matches
+# Only words that fit the categories have values. All others = 0 (not listed).
 #
 # ∆word+10$∆ = coding | hacking | english-structure | slang | attitude | humor
-# ∆word+7$∆  = pattern-indicator / relational-connector words
-# $ = context amplifier (spread importance to nearby words)
+# ∆word+7$∆  = pattern-indicator / relational-connector
+# $ = context amplifier
 # Ranking: +numbers > 0 > -numbers
 #
-
+# +10$ words: 1042
+# +7$  words: 221
+#
