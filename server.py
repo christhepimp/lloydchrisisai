@@ -143,6 +143,38 @@ class LloydHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
 
+        elif self.path == "/train_images":
+            try:
+                data = {}
+                if body:
+                    try:
+                        data = json.loads(body.decode())
+                    except Exception:
+                        data = {}
+                epochs = int(data.get("epochs", 40))
+                n_images = int(data.get("n_images", 100))
+                result = lloyd.image_gen.train_pattern_images(
+                    epochs=epochs, n_images=n_images
+                )
+                if "error" in result:
+                    self._json_response(result, status=500)
+                    return
+                try:
+                    lloyd.image_gen.save(BRAIN_DIR / "latest_image_net.npz")
+                except Exception:
+                    pass
+                self._json_response(
+                    {
+                        "message": result.get(
+                            "message",
+                            f"trained {epochs} epochs on {n_images} hardcoded pixel arrays",
+                        ),
+                        **{k: v for k, v in result.items() if k != "message"},
+                    }
+                )
+            except Exception as e:
+                self._json_response({"error": str(e)}, status=500)
+
         elif self.path == "/import":
             try:
                 with tempfile.NamedTemporaryFile(suffix=".lloyd", delete=False) as tmp:
