@@ -2,6 +2,7 @@
 Lloyd's Image Generation — pure original
 =========================================
 Uses model.tiny_image.TinyImageNet (NumPy only).
+Optionally backed by ImagePatternLearner (100 hardcoded pixel arrays).
 No external image APIs. Real PNG pixels.
 """
 
@@ -14,6 +15,12 @@ from pathlib import Path
 
 from model.tiny_image import TinyImageNet, image_to_data_uri
 
+try:
+    from model.image_pattern_learner import ImagePatternLearner, pattern_learner
+except Exception:
+    ImagePatternLearner = None
+    pattern_learner = None
+
 
 class ImageGenerator:
     def __init__(self, height: int = 64, width: int = 64):
@@ -21,6 +28,7 @@ class ImageGenerator:
         self.history = []
         self.height = height
         self.width = width
+        self.pattern = pattern_learner  # may be None if import failed
 
     def generate(self, prompt: str, autonomous: bool = False) -> Dict[str, Any]:
         """
@@ -39,7 +47,13 @@ class ImageGenerator:
         clean = " ".join(clean.split()) or prompt
 
         seed = abs(hash(clean + timestamp)) % (2**31)
-        pixels = self.net.generate(clean, seed=seed)
+
+        # prefer pattern learner if it has been trained
+        if self.pattern is not None and getattr(self.pattern, "trained", False):
+            pixels = self.pattern.generate(clean, seed=seed)
+        else:
+            pixels = self.net.generate(clean, seed=seed)
+
         data_uri = image_to_data_uri(pixels)
 
         result = {
@@ -71,15 +85,65 @@ class ImageGenerator:
                 "abstract purple vibes",
                 "robot face like lloyd",
                 "sunset ocean waves",
+                "uncanny valley doll face",
+                "creepy porcelain skin",
             ]
             return self.generate(random.choice(ideas), autonomous=True)
         return None
 
+    def train_pattern_images(self, epochs: int = 100, n_images: int = 100) -> Dict[str, Any]:
+        """
+        Hardcode 100 pixel arrays into memory and train the pattern learner.
+        Main signal = image mathematics (exact pixels + spatial structure).
+        """
+        if self.pattern is None:
+            return {"error": "image_pattern_learner not available"}
+        self.pattern.load_hardcoded_images(n=n_images)
+        result = self.pattern.train(epochs=epochs, lr=0.015)
+        # also keep the main net in sync
+        self.net = self.pattern.net
+        return result
+
+    def interpolate(self, idx_a: int, idx_b: int, alpha: float = 0.5) -> Dict[str, Any]:
+        if self.pattern is None:
+            return {"error": "pattern learner missing"}
+        pixels = self.pattern.interpolate(idx_a, idx_b, alpha=alpha)
+        return {
+            "image": image_to_data_uri(pixels),
+            "message": f"blended patterns {idx_a} ↔ {idx_b} (α={alpha})",
+        }
+
+    def variation(self, idx: int, strength: float = 0.25) -> Dict[str, Any]:
+        if self.pattern is None:
+            return {"error": "pattern learner missing"}
+        pixels = self.pattern.variation(idx, strength=strength)
+        return {
+            "image": image_to_data_uri(pixels),
+            "message": f"variation of hardcoded image {idx}",
+        }
+
+    def pixel_info(self, idx: int = 0) -> Dict[str, Any]:
+        if self.pattern is None:
+            return {"error": "pattern learner missing"}
+        return self.pattern.pixel_stats(idx)
+
     def save(self, path: str | Path):
         self.net.save(path)
+        if self.pattern is not None:
+            try:
+                self.pattern.save(Path(path).with_name("image_pattern.npz"))
+            except Exception:
+                pass
 
     def load(self, path: str | Path):
         self.net.load(path)
+        if self.pattern is not None:
+            p = Path(path).with_name("image_pattern.npz")
+            if p.exists():
+                try:
+                    self.pattern.load(p)
+                except Exception:
+                    pass
 
     def train_on_color(self, prompt: str, rgb: tuple, steps: int = 30) -> float:
         """Quick self-supervised style: push toward a color vibe from keywords."""
