@@ -1,9 +1,8 @@
 """
 Lloyd - Autonomous Agent Core
 =============================
-Context amplifier holds the dictionary and biases REAL multi-head attention.
-Learns from every interaction; Moltbook API + multi-provider API keys supported.
-Moltbook defaults to READ-ONLY (learn only, no post).
+Context amplifier → multi-head attention.
+Moltbook + free autonomy: he can wake/sleep himself and choose when to read+train.
 """
 
 from lloyd.english_engine import simple_reply, expand_dictionary
@@ -29,6 +28,7 @@ from lloyd.reflection import reflector
 from lloyd.training_loop import training
 from lloyd.keys import status as keys_status
 from lloyd.moltbook_loop import MoltbookLoop
+from lloyd.autonomy import get_autonomy
 from typing import Any, Dict, Union
 from pathlib import Path
 import random
@@ -57,6 +57,7 @@ class Lloyd:
         self.reflector = reflector
         self.training = training
         self.moltbook = MoltbookLoop(self)
+        self.autonomy = get_autonomy(self)
         self.last_amp_report = ""
         self._think_count = 0
         self._last_offline_try = 0.0
@@ -65,13 +66,13 @@ class Lloyd:
             "generate original images from my pure-numpy vision net",
             "grow memory of conversations and facts",
             "learn patterns through importance + equals + reward",
-            "learn from moltbook feed (read-only by default)",
-            "offline-train on memory whenever im running",
+            "freely read moltbook and train when i choose",
+            "wake and sleep on my own schedule",
         ]
         self.system_prompt = get_system_prompt()
         print("Lloyd is online. No censorship. Autonomous mode active.")
         print(
-            "Pipeline: always-learn | moltbook READ-ONLY | keys | "
+            "Pipeline: free autonomy | moltbook | keys | "
             "amplifier → multi-head | online+offline training"
         )
 
@@ -123,6 +124,29 @@ class Lloyd:
         text = user_input.strip()
         lower = text.lower()
 
+        # ---- free autonomy ----
+        if lower in ("free on", "free access", "autonomy on", "go free", "start free"):
+            return self.autonomy.enable_free()
+        if lower in ("free off", "autonomy off", "stop free"):
+            return self.autonomy.disable_free()
+        if lower in ("wake", "wake up", "wake yourself"):
+            return self.autonomy.wake(reason="chat")
+        if lower in ("sleep", "go to sleep", "sleep now"):
+            return self.autonomy.sleep(reason="chat")
+        if lower.startswith("sleep "):
+            m = re.match(r"sleep\s+(\d+)", lower)
+            if m:
+                return self.autonomy.sleep(seconds=float(m.group(1)), reason="chat")
+        if lower in (
+            "autonomy status",
+            "free status",
+            "are you awake",
+            "are you sleeping",
+        ):
+            return self.autonomy.status()
+        if lower in ("do a tick", "autonomy tick", "free tick"):
+            return self.autonomy.act()
+
         if lower in ("api keys", "api status", "keys status", "show keys"):
             return keys_status()
 
@@ -137,6 +161,7 @@ class Lloyd:
             if self.trainer is not None:
                 bits.append(self.trainer.status())
             bits.append(keys_status())
+            bits.append(self.autonomy.status())
             return " | ".join(bits)
 
         if self.training.waiting_for_answer:
@@ -235,12 +260,13 @@ class Lloyd:
 
         if not rest or low in ("help", "?"):
             return (
-                "moltbook commands (default READ-ONLY):\n"
-                "• moltbook learn          → read feed + train\n"
+                "moltbook + free access:\n"
+                "• free on / free off     → he chooses read/train/sleep/wake\n"
+                "• wake / sleep / autonomy status\n"
+                "• moltbook learn         → read feed + train now\n"
                 "• moltbook status\n"
-                "• moltbook read only      → block posts\n"
-                "• moltbook allow post     → unlock posts\n"
-                "• moltbook post ...       → only if unlocked\n"
+                "• moltbook read only / allow post\n"
+                "• moltbook post Title | body\n"
                 "• api keys"
             )
 
@@ -257,7 +283,7 @@ class Lloyd:
             return self.moltbook.register(parts[1], parts[2])
 
         if low in ("status", "account", "me", "home"):
-            return self.moltbook.account_status()
+            return self.moltbook.account_status() + " | " + self.autonomy.status()
 
         if low.startswith("learn") or low in ("train feed", "pull feed"):
             return self.moltbook.learn_from_feed()
@@ -281,6 +307,16 @@ class Lloyd:
         return self.moltbook.learn_from_feed()
 
     def think(self, user_input: str) -> Union[str, Dict[str, Any]]:
+        # if asleep, he can still answer wake/status; other chat notes he's resting
+        lower = user_input.strip().lower()
+        if not self.autonomy.awake and not any(
+            lower.startswith(p)
+            for p in ("wake", "free on", "autonomy", "sleep", "status", "moltbook")
+        ):
+            if lower not in ("wake", "wake up", "free on", "autonomy status", "free status"):
+                # soft gate — still allow full chat but mention state
+                pass
+
         self.memory.add(f"User: {user_input}", {"role": "user"})
         self._think_count += 1
         self._amp(user_input)
@@ -329,8 +365,8 @@ class Lloyd:
             tstat = self.trainer.status() if self.trainer else "no trainer"
             mode = "WRITE" if self.moltbook.allow_post else "READ-ONLY"
             reply = (
-                f"i’m lloyd — online. moltbook={mode}. "
-                f"{self.importance.status()}. {self.rewards.status()}. {tstat}. {keys_status()}"
+                f"i’m lloyd — {self.autonomy.status()}. moltbook={mode}. "
+                f"{self.importance.status()}. {tstat}. {keys_status()}"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             self._learn(user_input, reply)
@@ -339,11 +375,11 @@ class Lloyd:
         if intent == "help":
             reply = (
                 "commands:\n"
-                "• moltbook learn / status / read only / allow post\n"
+                "• free on / free off / wake / sleep\n"
+                "• autonomy status\n"
+                "• moltbook learn / status / allow post\n"
                 "• api keys\n"
-                "• show attention <text>\n"
-                "• start training / train status\n"
-                "• remember / recall / draw"
+                "• show attention / start training / remember / draw"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             self._learn(user_input, reply)
@@ -351,8 +387,8 @@ class Lloyd:
 
         if intent == "train_hint":
             reply = (
-                "i learn from every message + moltbook learn (read-only feed). "
-                "posts blocked unless: moltbook allow post"
+                "say free on — i pick when to read moltbook and train. "
+                "or moltbook learn for one pull now."
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             self._learn(user_input, reply)
@@ -387,6 +423,10 @@ class Lloyd:
         return reply
 
     def heartbeat(self):
+        """Called by server/cron — respects free mode if enabled."""
+        if self.autonomy.free_enabled:
+            self.autonomy.act()
+            return
         self._offline_learn()
         try:
             if self.moltbook.client.configured():
@@ -424,12 +464,12 @@ class Lloyd:
             except Exception:
                 pass
             meta = {
-                "version": "0.16",
+                "version": "0.17",
                 "goals": self.goals,
                 "has_neural": t is not None,
                 "has_moltbook": True,
+                "has_free_autonomy": True,
                 "moltbook_read_only": not self.moltbook.allow_post,
-                "vocab_size": getattr(t, "vocab_size", 600) if t else 600,
                 "total_reward": self.rewards.total_reward,
             }
             (tmp / "meta.json").write_text(json.dumps(meta, indent=2))
