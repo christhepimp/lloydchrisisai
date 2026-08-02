@@ -39,7 +39,6 @@ class MultiHeadAttention:
         self.W_k = np.random.randn(d_model, d_model) * scale
         self.W_v = np.random.randn(d_model, d_model) * scale
         self.W_o = np.random.randn(d_model, d_model) * scale
-        # last attention probs (avg over heads) for inspection
         self.last_attn: Optional[np.ndarray] = None
 
     def forward(
@@ -48,10 +47,6 @@ class MultiHeadAttention:
         mask: Optional[np.ndarray] = None,
         importance_bias: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        """
-        importance_bias: optional (seq_len,) vector from context amplifier.
-        Broadcast onto attention logits so high-value positions attract more weight.
-        """
         batch, seq_len, _ = x.shape
 
         Q = x @ self.W_q
@@ -64,15 +59,12 @@ class MultiHeadAttention:
 
         scores = (Q @ K.transpose(0, 1, 3, 2)) / np.sqrt(self.d_k)
 
-        # Context amplifier → real multi-head scores
-        # bias[j] boosts keys j (what we attend TO) and queries j slightly
         if importance_bias is not None:
             b = np.asarray(importance_bias, dtype=np.float64).reshape(-1)
             if b.shape[0] >= seq_len:
                 b = b[:seq_len]
             else:
                 b = np.pad(b, (0, seq_len - b.shape[0]))
-            # (seq, seq): add bias on key axis + milder on query axis
             key_bias = b[np.newaxis, :]
             query_bias = b[:, np.newaxis] * 0.5
             scores = scores + (key_bias + query_bias)[np.newaxis, np.newaxis, :, :]
@@ -81,7 +73,7 @@ class MultiHeadAttention:
             scores = np.where(mask == 0, -1e9, scores)
 
         attn = softmax(scores, axis=-1)
-        self.last_attn = np.mean(attn, axis=1)  # (batch, seq, seq)
+        self.last_attn = np.mean(attn, axis=1)
 
         out = attn @ V
         out = out.transpose(0, 2, 1, 3).reshape(batch, seq_len, self.d_model)
@@ -140,7 +132,7 @@ class TransformerBlock:
 class TinyTransformer:
     def __init__(
         self,
-        vocab_size: int = 128,
+        vocab_size: int = 50,
         d_model: int = 128,
         n_layers: int = 4,
         n_heads: int = 4,
@@ -207,7 +199,6 @@ class TinyTransformer:
             x = np.array([window])
             bias = None
             if importance_bias is not None:
-                # align bias to current window (end of sequence)
                 b = np.asarray(importance_bias).reshape(-1)
                 if b.shape[0] >= len(window):
                     bias = b[-len(window) :]
