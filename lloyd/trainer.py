@@ -10,6 +10,7 @@ Learns from:
 
 Tokenizer: stable character IDs (lloyd.tokenizer). Growing vocab_size only
 adds new embedding rows — existing char→id mappings never change.
+Default vocab_size = 600.
 """
 
 import numpy as np
@@ -29,7 +30,7 @@ except Exception:
 class LloydTrainer:
     def __init__(
         self,
-        vocab_size: int = 50,
+        vocab_size: int = 600,
         d_model: int = 128,
         n_layers: int = 4,
         n_heads: int = 4,
@@ -47,7 +48,6 @@ class LloydTrainer:
         )
         self.vocab_size = vocab_size
         self.max_seq_len = max_seq_len
-        # back-compat aliases
         self.stoi = self.tokenizer.stoi
         self.itos = self.tokenizer.itos
 
@@ -64,10 +64,7 @@ class LloydTrainer:
         return self.tokenizer.decode(ids)
 
     def expand_vocab(self, new_size: int) -> str:
-        """
-        Grow vocab without remapping. Old embeddings kept; new rows random.
-        Safe path for 50 → 128 → 256 later.
-        """
+        """Grow vocab without remapping. Old embeddings kept; new rows random."""
         new_size = max(self.vocab_size, int(new_size))
         if new_size == self.vocab_size:
             return f"vocab already {self.vocab_size}"
@@ -76,12 +73,10 @@ class LloydTrainer:
         d = self.model.d_model
         scale = 0.02
 
-        # expand token embeddings
         new_emb = np.random.randn(new_size, d) * scale
         new_emb[:old_v] = self.model.token_emb
         self.model.token_emb = new_emb
 
-        # expand output projection
         new_W = np.random.randn(d, new_size) * scale
         new_W[:, :old_v] = self.model.W_out
         self.model.W_out = new_W
@@ -231,26 +226,17 @@ class LloydTrainer:
         return str(path)
 
     def load_brain(self, path: str | Path):
-        """Load weights; if saved vocab < current, expand first then copy."""
         path = Path(path)
         data = np.load(path, allow_pickle=False)
         import json
 
         config = json.loads(str(data["config"]))
         saved_v = int(config["vocab_size"])
-        if saved_v < self.vocab_size:
-            # load into temporary smaller model then expand — simpler: expand us down? 
-            # Better: shrink-match load by expanding our table is wrong direction.
-            # If disk has smaller vocab, load into model resized to saved, then expand_vocab.
-            pass
         if saved_v != self.vocab_size:
             if saved_v > self.vocab_size:
-                # disk larger — expand us to match
                 self.expand_vocab(saved_v)
             else:
-                # disk smaller — load into matching size then keep our larger table padded
                 old_target = self.vocab_size
-                # temporarily set model to saved size for load
                 self.model = TinyTransformer(
                     vocab_size=saved_v,
                     d_model=self.model.d_model,
