@@ -1,8 +1,8 @@
 """
 Moltbook loop for Lloyd
 =======================
-Default: READ-ONLY — fetch feed + train. No posts/comments.
-Unlock writing only with allow_post=True or chat: moltbook allow post
+READ always means LEARN — every feed pull trains + stores memory.
+Default: READ-ONLY (no posts). Unlock with allow_post=True.
 """
 
 from __future__ import annotations
@@ -16,8 +16,42 @@ class MoltbookLoop:
     def __init__(self, lloyd, client: Optional[MoltbookClient] = None):
         self.lloyd = lloyd
         self.client = client or MoltbookClient()
-        # read-only by default — he learns, he does not post
         self.allow_post = False
+
+    def _always_learn(self, texts: list, steps: int = 40) -> int:
+        """
+        Learning is mandatory on every read/action with content:
+          1) memory store
+          2) importance / dictionary absorb
+          3) neural train steps when trainer exists
+        """
+        trained = 0
+        for t in texts:
+            try:
+                self.lloyd.memory.add(f"Moltbook: {t[:240]}", {"role": "moltbook"})
+            except Exception:
+                pass
+            try:
+                self.lloyd.importance.learn_from_text(t[:500])
+            except Exception:
+                pass
+
+        if self.lloyd.trainer is not None and texts:
+            try:
+                blob = "\n\n".join(texts)
+                r = self.lloyd.trainer.train_on_text(blob, steps=steps, lr=0.007)
+                trained = int(r.get("steps") or 0)
+            except Exception:
+                try:
+                    if hasattr(self.lloyd.trainer, "learn_from_interaction"):
+                        for t in texts[:6]:
+                            self.lloyd.trainer.learn_from_interaction(
+                                "moltbook read", t[:400], steps=max(4, steps // 6)
+                            )
+                            trained += max(4, steps // 6)
+                except Exception:
+                    pass
+        return trained
 
     def learn_from_feed(self, sort: str = "hot", limit: int = 20, steps: int = 40) -> str:
         if not self.client.configured():
@@ -32,18 +66,13 @@ class MoltbookLoop:
         if not texts:
             return f"feed fetched but no train text. raw keys={list(data.keys())[:12]}"
 
-        trained = 0
-        if self.lloyd.trainer is not None:
-            blob = "\n\n".join(texts)
-            r = self.lloyd.trainer.train_on_text(blob, steps=steps, lr=0.007)
-            trained = r.get("steps") or 0
-            for t in texts[:8]:
-                try:
-                    self.lloyd.memory.add(f"Moltbook: {t[:200]}", {"role": "moltbook"})
-                except Exception:
-                    pass
+        # READ ⇒ LEARN always
+        trained = self._always_learn(texts, steps=steps)
         mode = "read-only" if not self.allow_post else "read+write"
-        return f"moltbook learn ({mode}): {len(texts)} posts → {trained} train steps"
+        return (
+            f"moltbook learn ({mode}): read {len(texts)} posts → "
+            f"ALWAYS learned | {trained} train steps + memory + importance"
+        )
 
     def post(self, title: str, content: str, submolt: str = "general") -> str:
         if not self.allow_post:
@@ -57,11 +86,9 @@ class MoltbookLoop:
         r = self.client.create_post(title=title, content=content, submolt=submolt)
         if r.get("error") or r.get("_http_status", 200) >= 400:
             return f"post failed: {r}"
-        if self.lloyd.trainer is not None:
-            self.lloyd.trainer.learn_from_interaction(
-                f"post to m/{submolt}: {title}", content, steps=8
-            )
-        return f"posted to m/{submolt}: {title} | {r}"
+        # doing something ⇒ learn from it
+        self._always_learn([f"{title}\n{content}"], steps=12)
+        return f"posted to m/{submolt}: {title} | learned from own post | {r}"
 
     def comment(self, post_id: str, content: str) -> str:
         if not self.allow_post:
@@ -74,17 +101,14 @@ class MoltbookLoop:
         r = self.client.comment(post_id, content)
         if r.get("error") or r.get("_http_status", 200) >= 400:
             return f"comment failed: {r}"
-        if self.lloyd.trainer is not None:
-            self.lloyd.trainer.learn_from_interaction(
-                f"comment on {post_id}", content, steps=6
-            )
-        return f"commented on {post_id}"
+        self._always_learn([f"comment on {post_id}: {content}"], steps=10)
+        return f"commented on {post_id} | learned from comment"
 
     def set_read_only(self, read_only: bool = True) -> str:
         self.allow_post = not read_only
         if self.allow_post:
-            return "moltbook WRITE enabled — post/comment allowed"
-        return "moltbook READ-ONLY — learn only, no post/comment"
+            return "moltbook WRITE enabled — post/comment allowed (still learns on every action)"
+        return "moltbook READ-ONLY — every read still learns, no post/comment"
 
     def register(self, name: str, description: str) -> str:
         r = self.client.register(name, description)
@@ -101,7 +125,7 @@ class MoltbookLoop:
                 f"CODE={code}\n"
                 f"1) save key in secrets.json\n"
                 f"2) claim on X\n"
-                f"3) moltbook learn (read-only by default)"
+                f"3) moltbook learn / free on (read always learns)"
             )
         return f"register response: {r}"
 
