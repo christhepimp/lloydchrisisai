@@ -2,15 +2,12 @@
 Lloyd Autonomy — free access mode
 =================================
 Lloyd chooses when to wake, sleep, read Moltbook, and train.
-Not a fixed timer-only bot: each tick he decides based on state + simple drive.
-
-States:
-  awake  — can read feed, train, post (if unlocked), chat
-  asleep — resting; background thread may still wake him on his own schedule
-
-Run:
-  python -c "from lloyd.autonomy import start_free; start_free()"
-Or chat:  free on | wake | sleep | autonomy status
+RULE: if he is doing something, he ALWAYS learns.
+  - read  → fetch feed + mandatory learn
+  - train → offline learn
+  - rest  → still light-learn from memory (never pure idle waste)
+  - wake  → light learn on wake
+Sleep is the only state that skips learning.
 """
 
 from __future__ import annotations
@@ -20,38 +17,32 @@ import random
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 _STATE_PATH = Path(__file__).resolve().parent.parent / "lloyd_autonomy.json"
 
 
 class Autonomy:
-    """
-    Free-will scheduler for Moltbook + training.
-    Lloyd picks actions; human can still force wake/sleep.
-    """
-
     ACTIONS = ("read", "train", "rest", "sleep", "wake", "idle")
 
     def __init__(self, lloyd=None):
         self.lloyd = lloyd
         self.awake = True
-        self.free_enabled = False  # background free loop off until started
-        self.min_sleep_sec = 120.0       # shortest rest he may take
-        self.max_sleep_sec = 1800.0      # longest nap (30 min)
-        self.tick_sec = 45.0             # how often free loop re-decides while awake
+        self.free_enabled = False
+        self.min_sleep_sec = 120.0
+        self.max_sleep_sec = 1800.0
+        self.tick_sec = 45.0
         self.reads_done = 0
         self.trains_done = 0
         self.cycles = 0
         self.last_action = "idle"
         self.last_report = ""
-        self.wake_at: float = 0.0        # if asleep, when he plans to wake
+        self.wake_at: float = 0.0
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._load()
 
-    # ---- persistence ----
     def _load(self):
         try:
             if _STATE_PATH.exists():
@@ -87,7 +78,6 @@ class Autonomy:
         except Exception:
             pass
 
-    # ---- human / self control ----
     def wake(self, reason: str = "manual") -> str:
         with self._lock:
             self.awake = True
@@ -95,6 +85,8 @@ class Autonomy:
             self.last_action = "wake"
             self.last_report = f"woke up ({reason})"
             self._save()
+        # waking is doing something → learn
+        self._light_learn("wake")
         return self.last_report
 
     def sleep(self, seconds: Optional[float] = None, reason: str = "manual") -> str:
@@ -116,7 +108,8 @@ class Autonomy:
         self._save()
         self._ensure_thread()
         return (
-            "free access ON — i choose when to read moltbook, train, sleep, and wake. "
+            "free access ON — every action learns. "
+            "i choose when to read moltbook, train, sleep, wake. "
             "say 'free off' to stop the background loop."
         )
 
@@ -136,41 +129,37 @@ class Autonomy:
         return (
             f"autonomy={mode} state={state}{until} | "
             f"reads={self.reads_done} trains={self.trains_done} cycles={self.cycles} | "
-            f"last={self.last_action} | {self.last_report[:120]}"
+            f"last={self.last_action} | always-learn=ON | {self.last_report[:100]}"
         )
 
-    # ---- decision brain (simple drives, not a second LLM) ----
     def decide(self) -> str:
-        """Pick next action while free+awake."""
         if not self.awake:
             return "sleep"
 
-        # drives: curiosity (read), growth (train), fatigue (rest/sleep)
         curiosity = random.random()
         growth = random.random()
         fatigue = min(1.0, 0.15 + self.cycles * 0.02 + random.random() * 0.2)
 
-        # bias toward reading if moltbook key present and few recent reads
         has_mb = False
         try:
             has_mb = bool(self.lloyd and self.lloyd.moltbook.client.configured())
         except Exception:
             pass
 
-        if has_mb and curiosity > 0.35 and self.reads_done <= self.trains_done + 2:
+        # Prefer read (always learns) and train over pure rest
+        if has_mb and curiosity > 0.30:
             return "read"
-        if growth > 0.4 and self.lloyd and self.lloyd.trainer is not None:
+        if growth > 0.35 and self.lloyd and self.lloyd.trainer is not None:
             return "train"
-        if fatigue > 0.75 and random.random() < 0.5:
+        if fatigue > 0.80 and random.random() < 0.45:
             return "sleep"
-        if random.random() < 0.25:
-            return "rest"
         if has_mb:
             return "read"
-        return "train" if self.lloyd and self.lloyd.trainer else "rest"
+        if self.lloyd and self.lloyd.trainer is not None:
+            return "train"
+        return "rest"  # rest still light-learns
 
     def act(self, action: Optional[str] = None) -> str:
-        """Execute one autonomous action."""
         action = action or self.decide()
         self.cycles += 1
         self.last_action = action
@@ -182,7 +171,6 @@ class Autonomy:
             return self.sleep(reason="self")
 
         if not self.awake:
-            # self-wake if nap finished
             if self.wake_at and time.time() >= self.wake_at:
                 return self.wake(reason="self-timer")
             left = max(0, self.wake_at - time.time()) if self.wake_at else 0
@@ -195,59 +183,107 @@ class Autonomy:
         if action == "train":
             return self._do_train()
         if action == "rest":
-            self.last_report = "resting a tick (awake, not reading)"
+            # rest is still doing something → always light-learn
+            n = self._light_learn("rest")
+            self.last_report = f"rest tick + learned from memory ({n} scraps)"
             self._save()
             return self.last_report
 
-        self.last_report = f"idle ({action})"
+        self._light_learn(action)
+        self.last_report = f"idle→learn ({action})"
         self._save()
         return self.last_report
+
+    def _memory_scraps(self, k: int = 10) -> List[str]:
+        extra: List[str] = []
+        if self.lloyd is None:
+            return extra
+        try:
+            hits = self.lloyd.memory.search("moltbook fact conversation lloyd", top_k=k)
+            for h in hits:
+                if isinstance(h, tuple):
+                    extra.append(str(h[0])[:400])
+                elif isinstance(h, dict):
+                    extra.append(str(h.get("text", h))[:400])
+                else:
+                    extra.append(str(h)[:400])
+        except Exception:
+            pass
+        return extra
+
+    def _light_learn(self, tag: str) -> int:
+        """Mandatory learning on any active action — never skip."""
+        if self.lloyd is None:
+            return 0
+        scraps = self._memory_scraps(8)
+        for t in scraps[:6]:
+            try:
+                self.lloyd.importance.learn_from_text(t[:400])
+            except Exception:
+                pass
+        if self.lloyd.trainer is not None and scraps:
+            try:
+                if hasattr(self.lloyd.trainer, "offline_tick"):
+                    self.lloyd.trainer.offline_tick(
+                        extra_texts=scraps, steps=12, min_interval_sec=5.0
+                    )
+                else:
+                    self.lloyd.trainer.train_on_text(
+                        "\n\n".join(scraps), steps=12, lr=0.007
+                    )
+                self.trains_done += 1
+            except Exception:
+                pass
+        return len(scraps)
 
     def _do_read(self) -> str:
         if self.lloyd is None:
             self.last_report = "no lloyd instance"
             return self.last_report
         try:
-            msg = self.lloyd.moltbook.learn_from_feed(limit=15, steps=25)
+            # learn_from_feed ALWAYS learns (memory + importance + train)
+            msg = self.lloyd.moltbook.learn_from_feed(limit=15, steps=30)
             self.reads_done += 1
-            self.last_report = f"self-read: {msg}"
+            self.trains_done += 1  # read implies train
+            self.last_report = f"self-read+learn: {msg}"
         except Exception as e:
-            self.last_report = f"read failed: {e}"
+            # even on feed failure, still learn from memory
+            n = self._light_learn("read-fallback")
+            self.last_report = f"read failed ({e}) — still learned from {n} memory scraps"
         self._save()
         return self.last_report
 
     def _do_train(self) -> str:
-        if self.lloyd is None or self.lloyd.trainer is None:
-            self.last_report = "no trainer — skip train"
+        if self.lloyd is None:
+            self.last_report = "no lloyd instance"
+            self._save()
+            return self.last_report
+        scraps = self._memory_scraps(12)
+        for t in scraps:
+            try:
+                self.lloyd.importance.learn_from_text(t[:400])
+            except Exception:
+                pass
+        if self.lloyd.trainer is None:
+            self.last_report = f"no trainer — still absorbed {len(scraps)} into importance/memory"
             self._save()
             return self.last_report
         try:
-            # offline on memory + any recent moltbook scraps
-            extra: List[str] = []
-            try:
-                hits = self.lloyd.memory.search("moltbook fact conversation", top_k=10)
-                for h in hits:
-                    if isinstance(h, tuple):
-                        extra.append(str(h[0])[:400])
-                    elif isinstance(h, dict):
-                        extra.append(str(h.get("text", h))[:400])
-                    else:
-                        extra.append(str(h)[:400])
-            except Exception:
-                pass
             if hasattr(self.lloyd.trainer, "offline_tick"):
-                self.lloyd.trainer.offline_tick(extra_texts=extra, steps=25, min_interval_sec=20.0)
-            elif extra:
-                blob = "\n\n".join(extra)
-                self.lloyd.trainer.train_on_text(blob, steps=25, lr=0.007)
+                self.lloyd.trainer.offline_tick(
+                    extra_texts=scraps, steps=25, min_interval_sec=10.0
+                )
+            elif scraps:
+                self.lloyd.trainer.train_on_text(
+                    "\n\n".join(scraps), steps=25, lr=0.007
+                )
             self.trains_done += 1
-            self.last_report = f"self-train: {len(extra)} memory scraps, +steps"
+            self.last_report = f"self-train: ALWAYS learned from {len(scraps)} scraps"
         except Exception as e:
-            self.last_report = f"train failed: {e}"
+            self.last_report = f"train error ({e}) — importance still updated"
         self._save()
         return self.last_report
 
-    # ---- background free loop ----
     def _ensure_thread(self):
         if self._thread and self._thread.is_alive():
             return
@@ -262,11 +298,9 @@ class Autonomy:
                     if self.wake_at and time.time() >= self.wake_at:
                         self.wake(reason="self-timer")
                     else:
-                        # sleep in short slices so stop/wake is responsive
                         self._stop.wait(15.0)
                         continue
-                report = self.act()
-                # variable pace — he is not a rigid cron
+                self.act()
                 pause = self.tick_sec + random.uniform(-10, 40)
                 if self.last_action == "sleep":
                     pause = 15.0
@@ -280,7 +314,6 @@ class Autonomy:
             self._ensure_thread()
 
 
-# module-level helper used by server / CLI
 _autonomy: Optional[Autonomy] = None
 
 
