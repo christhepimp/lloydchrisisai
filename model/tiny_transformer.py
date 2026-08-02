@@ -5,6 +5,7 @@ Decoder-only Transformer — NumPy only.
 
 Multi-head attention can take an importance_bias from the context amplifier
 so dictionary-valued spans boost the REAL attention scores (not a fake header).
+Default vocab_size = 600 (matches stable tokenizer).
 """
 
 from __future__ import annotations
@@ -132,7 +133,7 @@ class TransformerBlock:
 class TinyTransformer:
     def __init__(
         self,
-        vocab_size: int = 50,
+        vocab_size: int = 600,
         d_model: int = 128,
         n_layers: int = 4,
         n_heads: int = 4,
