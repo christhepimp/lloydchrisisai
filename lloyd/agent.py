@@ -3,6 +3,9 @@ Lloyd - Autonomous Agent Core
 =============================
 Context amplifier holds the dictionary and biases REAL multi-head attention.
 No fake attention header.
+
+Learns from every interaction (online) and keeps offline-training
+while the process is alive (memory + conversation buffer).
 """
 
 from lloyd.english_engine import simple_reply, expand_dictionary
@@ -33,6 +36,7 @@ import zipfile
 import json
 import tempfile
 import re
+import time
 
 
 def _hit_text(h) -> str:
@@ -53,18 +57,21 @@ class Lloyd:
         self.reflector = reflector
         self.training = training
         self.last_amp_report = ""
+        self._think_count = 0
+        self._last_offline_try = 0.0
         self.goals = [
-            "improve my own neural weights from training data",
+            "improve my own neural weights from every interaction",
             "generate original images from my pure-numpy vision net",
             "grow memory of conversations and facts",
             "learn patterns through importance + equals + reward",
             "reflect when wrong so i notice what leads to the right answer",
+            "offline-train on memory whenever im running",
         ]
         self.system_prompt = get_system_prompt()
         print("Lloyd is online. No censorship. Autonomous mode active.")
         print(
-            "Pipeline: context amplifier → multi-head attention bias | "
-            "equals | + - | reward | reflection | training loop"
+            "Pipeline: always-learn | context amplifier → multi-head | "
+            "equals | reward | reflection | online+offline training"
         )
 
     def set_trainer(self, trainer):
@@ -77,6 +84,44 @@ class Lloyd:
         self.last_amp_report = report
         return report
 
+    def _learn(self, user_input: str, reply_text: str):
+        """Online: every interaction updates neural weights + importance."""
+        if not reply_text:
+            return
+        # dictionary / importance can still absorb markers in the turn
+        try:
+            self.importance.learn_from_text(user_input)
+            self.importance.learn_from_text(reply_text)
+        except Exception:
+            pass
+        if self.trainer is None:
+            return
+        try:
+            self.trainer.learn_from_interaction(user_input, reply_text, steps=12, lr=0.01)
+        except Exception:
+            pass
+
+    def _offline_learn(self):
+        """Offline: while alive, train on memory + recent buffer."""
+        if self.trainer is None:
+            return
+        now = time.time()
+        if now - self._last_offline_try < 40:
+            return
+        self._last_offline_try = now
+        extra = []
+        try:
+            # pull recent memory entries as training text
+            hits = self.memory.search("conversation fact lloyd user", top_k=12)
+            for h in hits:
+                extra.append(_hit_text(h)[:400])
+        except Exception:
+            pass
+        try:
+            self.trainer.offline_tick(extra_texts=extra, steps=20, min_interval_sec=45.0)
+        except Exception:
+            pass
+
     def _try_special(self, user_input: str) -> str | None:
         text = user_input.strip()
         lower = text.lower()
@@ -85,7 +130,10 @@ class Lloyd:
             return self.training.start()
 
         if lower in ("training status", "train status"):
-            return self.training.status()
+            bits = [self.training.status()]
+            if self.trainer is not None:
+                bits.append(self.trainer.status())
+            return " | ".join(bits)
 
         if self.training.waiting_for_answer:
             return self.training.submit_answer(text)
@@ -179,14 +227,21 @@ class Lloyd:
 
     def think(self, user_input: str) -> Union[str, Dict[str, Any]]:
         self.memory.add(f"User: {user_input}", {"role": "user"})
+        self._think_count += 1
 
         # Amplifier prepares multi-head bias for this utterance
         self._amp(user_input)
 
+        # continuous offline pass every few turns while running
+        if self._think_count % 3 == 0:
+            self._offline_learn()
+
         special = self._try_special(user_input)
         if special is not None:
-            self.memory.add(f"Lloyd: {special}", {"role": "lloyd"})
-            return apply_genz_style(special)
+            styled = apply_genz_style(special)
+            self.memory.add(f"Lloyd: {styled}", {"role": "lloyd"})
+            self._learn(user_input, styled)
+            return styled
 
         decision = route(user_input)
         intent = decision["intent"]
@@ -195,13 +250,17 @@ class Lloyd:
         if intent == "image":
             result = self.image_gen.generate(payload, autonomous=False)
             self.memory.add(f"Lloyd: {result['message']}", {"role": "lloyd"})
+            self._learn(user_input, result.get("message", ""))
+            self._offline_learn()
             return result
 
         if intent == "remember":
             self.memory.add(f"Fact: {payload}", {"role": "fact"})
             reply = f"locked in — i’ll remember: {payload}"
+            reply = apply_genz_style(reply)
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
-            return apply_genz_style(reply)
+            self._learn(user_input, reply)
+            return reply
 
         if intent == "recall":
             hits = self.memory.search(payload or user_input, top_k=4)
@@ -210,15 +269,19 @@ class Lloyd:
             else:
                 bits = [_hit_text(h)[:120] for h in hits]
                 reply = "from memory: " + " | ".join(bits)
+            reply = apply_genz_style(reply)
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
-            return apply_genz_style(reply)
+            self._learn(user_input, reply)
+            return reply
 
         if intent == "status":
+            tstat = self.trainer.status() if self.trainer else "no trainer"
             reply = (
-                f"i’m lloyd — online. context amplifier → multi-head attention. "
-                f"{self.importance.status()}. {self.rewards.status()}."
+                f"i’m lloyd — online. always learning. "
+                f"{self.importance.status()}. {self.rewards.status()}. {tstat}"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
+            self._learn(user_input, reply)
             return reply
 
         if intent == "help":
@@ -226,27 +289,30 @@ class Lloyd:
                 "commands:\n"
                 "• show attention <text>  → amplifier multi-head bias report\n"
                 "• start training\n"
+                "• train status\n"
                 "• anything = anything\n"
                 "• ∆word+10∆ / ∆word+10$∆\n"
                 "• 2 + 3 / reward status\n"
-                "• remember / recall / draw"
+                "• remember / recall / draw\n"
+                "• every message trains me (online + offline)"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
+            self._learn(user_input, reply)
             return reply
 
         if intent == "train_hint":
             reply = (
-                "type: start training\n"
-                "free answers first, then pattern questions. "
-                "wrong → reflection. correct → reward only."
+                "i already learn from every message. "
+                "type: start training for the pattern lessons. "
+                "upload + Train for bulk text. train status for numbers."
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
+            self._learn(user_input, reply)
             return reply
 
         reply = None
         if self.trainer is not None:
             try:
-                # generate_reply feeds amplifier bias into multi-head
                 neural = self.trainer.generate_reply(user_input, max_new=72)
                 if neural and len(neural) > 8:
                     letters = sum(ch.isalpha() for ch in neural)
@@ -269,10 +335,20 @@ class Lloyd:
 
         reply = apply_genz_style(reply)
         self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
+        self._learn(user_input, reply)
         return reply
+
+    def heartbeat(self):
+        """Call from server loop / cron — offline learning while idle."""
+        self._offline_learn()
 
     def remember(self, text: str):
         self.memory.add(text)
+        if self.trainer is not None and len(text) > 15:
+            try:
+                self.trainer.train_on_text(text, steps=8, lr=0.008)
+            except Exception:
+                pass
 
     def recall(self, query: str, top_k: int = 3):
         return self.memory.search(query, top_k=top_k)
@@ -296,7 +372,7 @@ class Lloyd:
             except Exception:
                 pass
             meta = {
-                "version": "0.13",
+                "version": "0.14",
                 "goals": self.goals,
                 "has_neural": t is not None,
                 "has_context_amplifier": True,
@@ -305,6 +381,9 @@ class Lloyd:
                 "has_reward": True,
                 "has_reflection": True,
                 "has_training_loop": True,
+                "has_online_learning": True,
+                "has_offline_learning": True,
+                "vocab_size": getattr(t, "vocab_size", 150) if t else 150,
                 "total_reward": self.rewards.total_reward,
             }
             (tmp / "meta.json").write_text(json.dumps(meta, indent=2))
@@ -323,7 +402,10 @@ class Lloyd:
                 self.memory.load(str(tmp / "memory.json"))
             t = trainer or self.trainer
             if (tmp / "brain.npz").exists() and t is not None:
-                t.load_brain(tmp / "brain.npz")
+                try:
+                    t.load_brain(tmp / "brain.npz")
+                except Exception as e:
+                    return f"brain loaded partially (weights mismatch?): {e}"
             if (tmp / "image_net.npz").exists():
                 try:
                     self.image_gen.load(tmp / "image_net.npz")
