@@ -3,6 +3,7 @@ Lloyd - Autonomous Agent Core
 =============================
 Context amplifier holds the dictionary and biases REAL multi-head attention.
 Learns from every interaction; Moltbook API + multi-provider API keys supported.
+Moltbook defaults to READ-ONLY (learn only, no post).
 """
 
 from lloyd.english_engine import simple_reply, expand_dictionary
@@ -64,13 +65,13 @@ class Lloyd:
             "generate original images from my pure-numpy vision net",
             "grow memory of conversations and facts",
             "learn patterns through importance + equals + reward",
-            "learn from moltbook feed when key is set",
+            "learn from moltbook feed (read-only by default)",
             "offline-train on memory whenever im running",
         ]
         self.system_prompt = get_system_prompt()
         print("Lloyd is online. No censorship. Autonomous mode active.")
         print(
-            "Pipeline: always-learn | moltbook API | keys | "
+            "Pipeline: always-learn | moltbook READ-ONLY | keys | "
             "amplifier → multi-head | online+offline training"
         )
 
@@ -229,27 +230,31 @@ class Lloyd:
         return None
 
     def _moltbook_cmd(self, text: str) -> str:
-        # strip leading moltbook / molt
         rest = re.sub(r"^(moltbook|molt)\s+", "", text.strip(), flags=re.I).strip()
         low = rest.lower()
 
         if not rest or low in ("help", "?"):
             return (
-                "moltbook commands:\n"
-                "• moltbook register <Name> <description>\n"
+                "moltbook commands (default READ-ONLY):\n"
+                "• moltbook learn          → read feed + train\n"
                 "• moltbook status\n"
-                "• moltbook learn\n"
-                "• moltbook post <title> | <body>\n"
-                "• api keys\n"
-                "setup: cp secrets.example.json secrets.json  (add MOLTBOOK key)"
+                "• moltbook read only      → block posts\n"
+                "• moltbook allow post     → unlock posts\n"
+                "• moltbook post ...       → only if unlocked\n"
+                "• api keys"
             )
+
+        if low in ("read only", "readonly", "mute", "no post", "read-only"):
+            return self.moltbook.set_read_only(True)
+
+        if low in ("allow post", "allow posts", "write", "unmute", "enable post"):
+            return self.moltbook.set_read_only(False)
 
         if low.startswith("register"):
             parts = rest.split(None, 2)
             if len(parts) < 3:
                 return "usage: moltbook register AgentName description here"
-            name, desc = parts[1], parts[2]
-            return self.moltbook.register(name, desc)
+            return self.moltbook.register(parts[1], parts[2])
 
         if low in ("status", "account", "me", "home"):
             return self.moltbook.account_status()
@@ -264,7 +269,7 @@ class Lloyd:
             else:
                 title, content = body[:80], body
             if not content:
-                return "usage: moltbook post Title here | body text here"
+                return "usage: moltbook post Title | body"
             return self.moltbook.post(title, content)
 
         if low.startswith("comment"):
@@ -322,8 +327,9 @@ class Lloyd:
 
         if intent == "status":
             tstat = self.trainer.status() if self.trainer else "no trainer"
+            mode = "WRITE" if self.moltbook.allow_post else "READ-ONLY"
             reply = (
-                f"i’m lloyd — online. always learning. "
+                f"i’m lloyd — online. moltbook={mode}. "
                 f"{self.importance.status()}. {self.rewards.status()}. {tstat}. {keys_status()}"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
@@ -333,12 +339,11 @@ class Lloyd:
         if intent == "help":
             reply = (
                 "commands:\n"
-                "• moltbook register/status/learn/post\n"
+                "• moltbook learn / status / read only / allow post\n"
                 "• api keys\n"
                 "• show attention <text>\n"
                 "• start training / train status\n"
-                "• remember / recall / draw\n"
-                "• every message trains me"
+                "• remember / recall / draw"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             self._learn(user_input, reply)
@@ -346,8 +351,8 @@ class Lloyd:
 
         if intent == "train_hint":
             reply = (
-                "i learn from every message + moltbook learn pulls the feed. "
-                "set MOLTBOOK_API_KEY or secrets.json first."
+                "i learn from every message + moltbook learn (read-only feed). "
+                "posts blocked unless: moltbook allow post"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             self._learn(user_input, reply)
@@ -419,11 +424,11 @@ class Lloyd:
             except Exception:
                 pass
             meta = {
-                "version": "0.15",
+                "version": "0.16",
                 "goals": self.goals,
                 "has_neural": t is not None,
                 "has_moltbook": True,
-                "has_api_keys": True,
+                "moltbook_read_only": not self.moltbook.allow_post,
                 "vocab_size": getattr(t, "vocab_size", 600) if t else 600,
                 "total_reward": self.rewards.total_reward,
             }
