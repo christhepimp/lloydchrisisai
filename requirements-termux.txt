@@ -1,0 +1,3 @@
+# Termux / Android — keep this minimal
+# Do NOT install full requirements.txt on Termux (gradio → orjson → Rust fails)
+numpy>=1.24.0
