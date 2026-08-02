@@ -8,12 +8,14 @@ Learns from:
   - every chat interaction (online)
   - continuous offline passes over memory / logs while the process is alive
 
-vocab_size = 50 (compact char set; other chars map by ord % 50)
+Tokenizer: stable character IDs (lloyd.tokenizer). Growing vocab_size only
+adds new embedding rows — existing char→id mappings never change.
 """
 
 import numpy as np
 from pathlib import Path
 from model.tiny_transformer import TinyTransformer, train_step
+from lloyd.tokenizer import StableTokenizer
 from typing import List, Tuple, Optional
 import re
 import time
@@ -22,22 +24,6 @@ try:
     from lloyd.context_amplifier import amplifier as _amplifier
 except Exception:
     _amplifier = None
-
-# Compact 50-char vocab: space + letters + digits + common punct
-_CORE = (
-    " "
-    + "abcdefghijklmnopqrstuvwxyz"
-    + "0123456789"
-    + ".',!?-\n"
-)  # 1+26+10+7 = 44
-_PAD = list(":;()[]{}""/#@_+=*")
-_ALL_CHARS = list(_CORE)
-for ch in _PAD:
-    if ch not in _ALL_CHARS:
-        _ALL_CHARS.append(ch)
-_ALL_CHARS = _ALL_CHARS[:50]
-while len(_ALL_CHARS) < 50:
-    _ALL_CHARS.append(chr(0x80 + len(_ALL_CHARS)))
 
 
 class LloydTrainer:
@@ -50,6 +36,7 @@ class LloydTrainer:
         d_ff: int = 256,
         max_seq_len: int = 96,
     ):
+        self.tokenizer = StableTokenizer(vocab_size=vocab_size)
         self.model = TinyTransformer(
             vocab_size=vocab_size,
             d_model=d_model,
@@ -60,14 +47,9 @@ class LloydTrainer:
         )
         self.vocab_size = vocab_size
         self.max_seq_len = max_seq_len
-        self.chars = list(_ALL_CHARS[:vocab_size])
-        self.stoi = {ch: i for i, ch in enumerate(self.chars)}
-        # uppercase → lowercase slot when present
-        for ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-            low = ch.lower()
-            if low in self.stoi and ch not in self.stoi:
-                self.stoi[ch] = self.stoi[low]
-        self.itos = {i: ch for i, ch in enumerate(self.chars)}
+        # back-compat aliases
+        self.stoi = self.tokenizer.stoi
+        self.itos = self.tokenizer.itos
 
         self.interaction_count = 0
         self.total_online_steps = 0
@@ -76,16 +58,43 @@ class LloydTrainer:
         self._corpus_buf: List[str] = []
 
     def text_to_ids(self, text: str) -> List[int]:
-        ids = []
-        for ch in text:
-            if ch in self.stoi:
-                ids.append(self.stoi[ch])
-            else:
-                ids.append(ord(ch) % self.vocab_size)
-        return ids
+        return self.tokenizer.encode(text)
 
     def ids_to_text(self, ids: List[int]) -> str:
-        return "".join(self.itos.get(i, "?") for i in ids)
+        return self.tokenizer.decode(ids)
+
+    def expand_vocab(self, new_size: int) -> str:
+        """
+        Grow vocab without remapping. Old embeddings kept; new rows random.
+        Safe path for 50 → 128 → 256 later.
+        """
+        new_size = max(self.vocab_size, int(new_size))
+        if new_size == self.vocab_size:
+            return f"vocab already {self.vocab_size}"
+
+        old_v = self.vocab_size
+        d = self.model.d_model
+        scale = 0.02
+
+        # expand token embeddings
+        new_emb = np.random.randn(new_size, d) * scale
+        new_emb[:old_v] = self.model.token_emb
+        self.model.token_emb = new_emb
+
+        # expand output projection
+        new_W = np.random.randn(d, new_size) * scale
+        new_W[:, :old_v] = self.model.W_out
+        self.model.W_out = new_W
+        new_b = np.zeros(new_size)
+        new_b[:old_v] = self.model.b_out
+        self.model.b_out = new_b
+
+        self.model.vocab_size = new_size
+        self.vocab_size = new_size
+        self.tokenizer.expand(new_size)
+        self.stoi = self.tokenizer.stoi
+        self.itos = self.tokenizer.itos
+        return f"vocab expanded {old_v} → {new_size} (stable ids preserved)"
 
     def _bias(self, text: str, seq_len: Optional[int] = None) -> Optional[np.ndarray]:
         if _amplifier is None:
@@ -145,7 +154,6 @@ class LloydTrainer:
     def learn_from_interaction(
         self, user_text: str, reply_text: str, steps: int = 12, lr: float = 0.01
     ) -> dict:
-        """Online learning: every chat turn updates weights."""
         pair = f"User: {user_text}\nLloyd: {reply_text}\n"
         self._corpus_buf.append(pair)
         if len(self._corpus_buf) > 200:
@@ -163,7 +171,6 @@ class LloydTrainer:
         steps: int = 20,
         min_interval_sec: float = 45.0,
     ) -> dict:
-        """Continuous offline learning while process is alive."""
         now = time.time()
         if now - self._last_offline < min_interval_sec:
             return {"steps": 0, "message": "offline cooldown"}
@@ -209,13 +216,12 @@ class LloydTrainer:
         new_ids = out[len(ids) :]
         text = self.ids_to_text(new_ids)
         text = text.split("\n")[0].strip()
-        text = re.sub(r"[^\x20-\x7e\n]+", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
         return text[:240] if text else ""
 
     def status(self) -> str:
         return (
-            f"trainer vocab={self.vocab_size} interactions={self.interaction_count} "
+            f"trainer {self.tokenizer.status()} interactions={self.interaction_count} "
             f"online_steps={self.total_online_steps} offline_steps={self.total_offline_steps} "
             f"buffer={len(self._corpus_buf)}"
         )
@@ -225,4 +231,39 @@ class LloydTrainer:
         return str(path)
 
     def load_brain(self, path: str | Path):
+        """Load weights; if saved vocab < current, expand first then copy."""
+        path = Path(path)
+        data = np.load(path, allow_pickle=False)
+        import json
+
+        config = json.loads(str(data["config"]))
+        saved_v = int(config["vocab_size"])
+        if saved_v < self.vocab_size:
+            # load into temporary smaller model then expand — simpler: expand us down? 
+            # Better: shrink-match load by expanding our table is wrong direction.
+            # If disk has smaller vocab, load into model resized to saved, then expand_vocab.
+            pass
+        if saved_v != self.vocab_size:
+            if saved_v > self.vocab_size:
+                # disk larger — expand us to match
+                self.expand_vocab(saved_v)
+            else:
+                # disk smaller — load into matching size then keep our larger table padded
+                old_target = self.vocab_size
+                # temporarily set model to saved size for load
+                self.model = TinyTransformer(
+                    vocab_size=saved_v,
+                    d_model=self.model.d_model,
+                    n_layers=self.model.n_layers,
+                    n_heads=self.model.n_heads,
+                    d_ff=self.model.d_ff,
+                    max_seq_len=self.model.max_seq_len,
+                )
+                self.vocab_size = saved_v
+                self.tokenizer.set_vocab_size(saved_v)
+                self.model.load(path)
+                self.expand_vocab(old_target)
+                self.stoi = self.tokenizer.stoi
+                self.itos = self.tokenizer.itos
+                return
         self.model.load(path)
