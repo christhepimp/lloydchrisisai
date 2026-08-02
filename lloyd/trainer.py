@@ -7,6 +7,8 @@ Context amplifier bias is fed into multi-head attention on every forward.
 Learns from:
   - every chat interaction (online)
   - continuous offline passes over memory / logs while the process is alive
+
+vocab_size = 50 (compact char set; other chars map by ord % 50)
 """
 
 import numpy as np
@@ -21,22 +23,27 @@ try:
 except Exception:
     _amplifier = None
 
-# Printable ASCII + common extras to fill vocab 150
-_BASE_CHARS = [chr(i) for i in range(32, 127)]  # 95 chars
-_EXTRA = list("\n\t…—–“”‘’•°±×÷€£¥©®™✓✗→←↑↓★☆♥♦♣♠")
-_ALL_CHARS = []
-for ch in _BASE_CHARS + _EXTRA:
+# Compact 50-char vocab: space + letters + digits + common punct
+_CORE = (
+    " "
+    + "abcdefghijklmnopqrstuvwxyz"
+    + "0123456789"
+    + ".',!?-\n"
+)  # 1+26+10+7 = 44
+_PAD = list(":;()[]{}""/#@_+=*")
+_ALL_CHARS = list(_CORE)
+for ch in _PAD:
     if ch not in _ALL_CHARS:
         _ALL_CHARS.append(ch)
-while len(_ALL_CHARS) < 150:
-    _ALL_CHARS.append(chr(0x100 + len(_ALL_CHARS)))  # pad slots
-_ALL_CHARS = _ALL_CHARS[:150]
+_ALL_CHARS = _ALL_CHARS[:50]
+while len(_ALL_CHARS) < 50:
+    _ALL_CHARS.append(chr(0x80 + len(_ALL_CHARS)))
 
 
 class LloydTrainer:
     def __init__(
         self,
-        vocab_size: int = 150,
+        vocab_size: int = 50,
         d_model: int = 128,
         n_layers: int = 4,
         n_heads: int = 4,
@@ -55,13 +62,12 @@ class LloydTrainer:
         self.max_seq_len = max_seq_len
         self.chars = list(_ALL_CHARS[:vocab_size])
         self.stoi = {ch: i for i, ch in enumerate(self.chars)}
-        # map any leftover printable into range
-        for i, ch in enumerate(chr(c) for c in range(32, 127)):
-            if ch not in self.stoi:
-                self.stoi[ch] = i % vocab_size
-        self.itos = {i: ch for ch, i in self.stoi.items()}
-        for i, ch in enumerate(self.chars):
-            self.itos[i] = ch
+        # uppercase → lowercase slot when present
+        for ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            low = ch.lower()
+            if low in self.stoi and ch not in self.stoi:
+                self.stoi[ch] = self.stoi[low]
+        self.itos = {i: ch for i, ch in enumerate(self.chars)}
 
         self.interaction_count = 0
         self.total_online_steps = 0
@@ -99,7 +105,6 @@ class LloydTrainer:
     ) -> List[Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]]:
         ids = self.text_to_ids(text)
         if len(ids) < seq_len + 1:
-            # short text: still train if at least 8 chars
             if len(ids) < 8:
                 return []
             seq_len = max(4, len(ids) - 1)
@@ -146,7 +151,6 @@ class LloydTrainer:
         if len(self._corpus_buf) > 200:
             self._corpus_buf = self._corpus_buf[-200:]
 
-        # train on this exchange + a bit of recent buffer for continuity
         blob = "\n".join(self._corpus_buf[-8:])
         result = self.train_on_text(blob, steps=steps, lr=lr)
         self.interaction_count += 1
@@ -159,11 +163,7 @@ class LloydTrainer:
         steps: int = 20,
         min_interval_sec: float = 45.0,
     ) -> dict:
-        """
-        Continuous offline learning while process is alive.
-        Call periodically from server / agent heartbeat.
-        Trains on interaction buffer + any extra texts (memory dumps, logs).
-        """
+        """Continuous offline learning while process is alive."""
         now = time.time()
         if now - self._last_offline < min_interval_sec:
             return {"steps": 0, "message": "offline cooldown"}
