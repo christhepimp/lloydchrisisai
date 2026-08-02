@@ -3,6 +3,10 @@ Lloyd Trainer
 =============
 Trains pure-NumPy TinyTransformer.
 Context amplifier bias is fed into multi-head attention on every forward.
+
+Learns from:
+  - every chat interaction (online)
+  - continuous offline passes over memory / logs while the process is alive
 """
 
 import numpy as np
@@ -10,17 +14,29 @@ from pathlib import Path
 from model.tiny_transformer import TinyTransformer, train_step
 from typing import List, Tuple, Optional
 import re
+import time
 
 try:
     from lloyd.context_amplifier import amplifier as _amplifier
 except Exception:
     _amplifier = None
 
+# Printable ASCII + common extras to fill vocab 150
+_BASE_CHARS = [chr(i) for i in range(32, 127)]  # 95 chars
+_EXTRA = list("\n\t…—–“”‘’•°±×÷€£¥©®™✓✗→←↑↓★☆♥♦♣♠")
+_ALL_CHARS = []
+for ch in _BASE_CHARS + _EXTRA:
+    if ch not in _ALL_CHARS:
+        _ALL_CHARS.append(ch)
+while len(_ALL_CHARS) < 150:
+    _ALL_CHARS.append(chr(0x100 + len(_ALL_CHARS)))  # pad slots
+_ALL_CHARS = _ALL_CHARS[:150]
+
 
 class LloydTrainer:
     def __init__(
         self,
-        vocab_size: int = 128,
+        vocab_size: int = 150,
         d_model: int = 128,
         n_layers: int = 4,
         n_heads: int = 4,
@@ -37,9 +53,21 @@ class LloydTrainer:
         )
         self.vocab_size = vocab_size
         self.max_seq_len = max_seq_len
-        self.chars = sorted(set(chr(i) for i in range(32, 127)))
-        self.stoi = {ch: i % vocab_size for i, ch in enumerate(self.chars)}
+        self.chars = list(_ALL_CHARS[:vocab_size])
+        self.stoi = {ch: i for i, ch in enumerate(self.chars)}
+        # map any leftover printable into range
+        for i, ch in enumerate(chr(c) for c in range(32, 127)):
+            if ch not in self.stoi:
+                self.stoi[ch] = i % vocab_size
         self.itos = {i: ch for ch, i in self.stoi.items()}
+        for i, ch in enumerate(self.chars):
+            self.itos[i] = ch
+
+        self.interaction_count = 0
+        self.total_online_steps = 0
+        self.total_offline_steps = 0
+        self._last_offline = 0.0
+        self._corpus_buf: List[str] = []
 
     def text_to_ids(self, text: str) -> List[int]:
         ids = []
@@ -47,7 +75,7 @@ class LloydTrainer:
             if ch in self.stoi:
                 ids.append(self.stoi[ch])
             else:
-                ids.append(0)
+                ids.append(ord(ch) % self.vocab_size)
         return ids
 
     def ids_to_text(self, ids: List[int]) -> str:
@@ -71,16 +99,19 @@ class LloydTrainer:
     ) -> List[Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]]:
         ids = self.text_to_ids(text)
         if len(ids) < seq_len + 1:
-            return []
+            # short text: still train if at least 8 chars
+            if len(ids) < 8:
+                return []
+            seq_len = max(4, len(ids) - 1)
 
         batches = []
-        for i in range(0, len(ids) - seq_len - 1, max(1, seq_len // 2)):
+        step = max(1, seq_len // 2)
+        for i in range(0, len(ids) - seq_len - 1, step):
             chunk = ids[i : i + seq_len + 1]
             if len(chunk) < seq_len + 1:
                 break
             x = np.array([chunk[:-1]])
             y = np.array([chunk[1:]])
-            # char-aligned bias for this window of the original text
             window_text = text[i : i + seq_len] if i + seq_len <= len(text) else text[i:]
             bias = self._bias(window_text, seq_len=seq_len)
             batches.append((x, y, bias))
@@ -106,6 +137,49 @@ class LloydTrainer:
             "message": f"trained {steps} steps | loss {losses[0]:.3f} → {losses[-1]:.3f}",
         }
 
+    def learn_from_interaction(
+        self, user_text: str, reply_text: str, steps: int = 12, lr: float = 0.01
+    ) -> dict:
+        """Online learning: every chat turn updates weights."""
+        pair = f"User: {user_text}\nLloyd: {reply_text}\n"
+        self._corpus_buf.append(pair)
+        if len(self._corpus_buf) > 200:
+            self._corpus_buf = self._corpus_buf[-200:]
+
+        # train on this exchange + a bit of recent buffer for continuity
+        blob = "\n".join(self._corpus_buf[-8:])
+        result = self.train_on_text(blob, steps=steps, lr=lr)
+        self.interaction_count += 1
+        self.total_online_steps += result.get("steps") or 0
+        return result
+
+    def offline_tick(
+        self,
+        extra_texts: Optional[List[str]] = None,
+        steps: int = 20,
+        min_interval_sec: float = 45.0,
+    ) -> dict:
+        """
+        Continuous offline learning while process is alive.
+        Call periodically from server / agent heartbeat.
+        Trains on interaction buffer + any extra texts (memory dumps, logs).
+        """
+        now = time.time()
+        if now - self._last_offline < min_interval_sec:
+            return {"steps": 0, "message": "offline cooldown"}
+
+        parts = list(self._corpus_buf[-40:])
+        if extra_texts:
+            parts.extend(t for t in extra_texts if t and len(t) > 10)
+        if not parts:
+            return {"steps": 0, "message": "nothing to offline-train yet"}
+
+        blob = "\n".join(parts)
+        result = self.train_on_text(blob, steps=steps, lr=0.006)
+        self.total_offline_steps += result.get("steps") or 0
+        self._last_offline = now
+        return result
+
     def train_on_files(self, files: List[Path], steps_per_file: int = 50) -> dict:
         total_steps = 0
         reports = []
@@ -117,6 +191,7 @@ class LloydTrainer:
             result = self.train_on_text(text, steps=steps_per_file)
             total_steps += result["steps"]
             reports.append(f"{f.name}: {result['message']}")
+            self._corpus_buf.append(text[:2000])
 
         return {
             "files": len(files),
@@ -134,9 +209,16 @@ class LloydTrainer:
         new_ids = out[len(ids) :]
         text = self.ids_to_text(new_ids)
         text = text.split("\n")[0].strip()
-        text = re.sub(r"[^\x20-\x7e]+", " ", text)
+        text = re.sub(r"[^\x20-\x7e\n]+", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
         return text[:240] if text else ""
+
+    def status(self) -> str:
+        return (
+            f"trainer vocab={self.vocab_size} interactions={self.interaction_count} "
+            f"online_steps={self.total_online_steps} offline_steps={self.total_offline_steps} "
+            f"buffer={len(self._corpus_buf)}"
+        )
 
     def save_brain(self, path: str | Path = "lloyd_brain.npz"):
         self.model.save(path)
