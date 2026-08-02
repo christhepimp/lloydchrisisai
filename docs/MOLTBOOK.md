@@ -1,4 +1,4 @@
-# Lloyd → Moltbook + API keys
+# Lloyd → Moltbook + Free Autonomy
 
 ## 1. API keys (local only)
 
@@ -11,59 +11,77 @@ Or environment:
 
 ```bash
 export MOLTBOOK_API_KEY=moltbook_xxx
-# optional later:
-export OPENAI_API_KEY=...
-export ANTHROPIC_API_KEY=...
-export OPENROUTER_API_KEY=...
-export XAI_API_KEY=...
 ```
 
 `secrets.json` is gitignored. Never commit keys.
 
 ## 2. Register Lloyd on Moltbook
 
-In chat with Lloyd (or Python):
-
 ```
-moltbook register LloydChrisIsAI pure-numpy agent learning from every interaction
+moltbook register LloydChrisIsAI pure-numpy agent — free autonomy, reads and trains when he chooses
 ```
 
-You’ll get:
-- `API_KEY`
-- `CLAIM_URL`
-- verification `CODE`
+You’ll get `API_KEY`, `CLAIM_URL`, verification `CODE`.
 
-1. Save the key into `secrets.json` or `MOLTBOOK_API_KEY`
-2. Open claim URL in browser → verify with X/Twitter
-3. Check: `moltbook status`
+1. Save key in `secrets.json` or `MOLTBOOK_API_KEY`
+2. Claim on X via claim URL
+3. `moltbook status`
 
-## 3. Commands
+> Note: public profile `u/Lloyd` on Moltbook may be a different agent. Register **your** name if you haven’t.
+
+## 3. Free access (wake / sleep / choose when to learn)
 
 | Command | What it does |
 |---------|----------------|
-| `moltbook register <name> <desc>` | Create agent + get key/claim |
-| `moltbook status` | Claim/account status |
-| `moltbook learn` | Fetch hot feed → train Lloyd |
-| `moltbook post <title> \| <body>` | Create post in m/general |
-| `api keys` | Show which keys are loaded |
+| **`free on`** | Background loop: **he chooses** when to read Moltbook, train, rest, sleep, self-wake |
+| **`free off`** | Stop background loop |
+| **`wake`** | Force awake |
+| **`sleep`** / `sleep 300` | Force sleep (optional seconds) — he self-wakes after |
+| **`autonomy status`** | Awake/asleep, free mode, read/train counts |
+| **`do a tick`** | Run one autonomous decision now |
 
-## 4. What “real API features” means here
+While `free on`:
+- **read** → fetch Moltbook feed → train steps on post text
+- **train** → offline train on memory
+- **sleep** → naps (2–30 min), then **self-wake**
+- Decisions are not a rigid cron; curiosity / growth / fatigue drives pick the action
 
-Implemented for Moltbook:
-- register / status / me / home
-- feed / posts / search
-- create post / comment / upvote
-- follow / subscribe
-- **learn_from_feed** → gradient steps on post text
+## 4. Moltbook commands
 
-Key loader also ready for: OpenAI, Anthropic, OpenRouter, xAI, Groq, Google, Serper, Brave — store keys the same way; wire each provider when you need it.
+| Command | What it does |
+|---------|----------------|
+| `moltbook learn` | One-shot: fetch hot feed → train |
+| `moltbook status` | Account + autonomy status |
+| `moltbook read only` | Block posts (default) |
+| `moltbook allow post` | Unlock posts |
+| `moltbook post Title \| body` | Post (only if unlocked) |
+| `api keys` | Which keys are loaded |
 
-## 5. Upload / run with Moltbook
+## 5. Files
 
-1. Download zip: https://github.com/christhepimp/lloydchrisisai/archive/refs/heads/main.zip
-2. Unzip, `pip install -r requirements.txt`
-3. Add `secrets.json` with moltbook key
-4. `python server.py` or Colab `app.py`
-5. Chat: `moltbook learn` then optionally `moltbook post ...`
+| File | Role |
+|------|------|
+| `lloyd/autonomy.py` | Free wake/sleep/read/train loop |
+| `lloyd/moltbook_client.py` | Moltbook REST API |
+| `lloyd/moltbook_loop.py` | learn / post / register |
+| `lloyd/keys.py` | secrets + env |
 
-Rate limits (platform): ~1 post / 30 min, comments throttled, daily caps.
+State saved to `lloyd_autonomy.json` (local).
+
+## 6. Run
+
+```bash
+git pull
+# secrets.json with moltbook key
+python server.py
+```
+
+Chat:
+
+```
+free on
+autonomy status
+moltbook learn
+```
+
+Keep the process running (Termux / server / Mac) so the free loop can wake and train while you are away.
