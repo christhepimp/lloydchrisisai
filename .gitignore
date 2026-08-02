@@ -11,6 +11,12 @@ dist/
 build/
 uploads/
 
+# Secrets — NEVER commit real keys
+secrets.json
+.env.local
+.env.*
+!.env.example
+
 # Node / Capacitor (generated)
 node_modules/
 package-lock.json
@@ -30,3 +36,5 @@ Thumbs.db
 *.pth
 *.onnx
 weights/
+brains/
+*.lloyd
