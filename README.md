@@ -42,17 +42,27 @@ Open **http://localhost:8080**
 
 ## Quick start (Termux on Android)
 
+**Do not** install full `requirements.txt` (Gradio/orjson breaks on Termux).
+
 ```bash
 pkg update -y && pkg install -y python git
 git clone https://github.com/christhepimp/lloydchrisisai.git
 cd lloydchrisisai
-pip install -r requirements.txt
+pip install -r requirements-termux.txt
 python server.py
 ```
 
 Phone browser: **http://127.0.0.1:8080**
 
-Full steps + Moltbook key: **[docs/TERMUX.md](docs/TERMUX.md)**
+If `pip install -r requirements.txt` already failed:
+
+```bash
+cd ~/lloydchrisisai
+pip install numpy
+python server.py
+```
+
+Full steps: **[docs/TERMUX.md](docs/TERMUX.md)**
 
 ---
 
@@ -88,17 +98,15 @@ See **[docs/MOLTBOOK.md](docs/MOLTBOOK.md)**
 
 ```
 lloydchrisisai/
-├── server.py              ← Termux / local / cloud
-├── app.py                 ← Gradio / Colab
-├── lloyd/                 ← agent, trainer, tokenizer, moltbook, keys
-├── model/                 ← TinyTransformer + image nets
-├── interface/mobile_web/  ← UI
-├── secrets.example.json   ← copy to secrets.json (gitignored)
-└── docs/
-    ├── TERMUX.md
-    ├── MOLTBOOK.md
-    ├── COLAB.md
-    └── GET_THE_APK.md
+├── server.py                 ← Termux / local / cloud
+├── app.py                    ← Gradio / Colab only
+├── requirements-termux.txt   ← numpy only (Android)
+├── requirements.txt          ← full (PC / Colab)
+├── lloyd/
+├── model/
+├── interface/mobile_web/
+├── secrets.example.json
+└── docs/TERMUX.md
 ```
 
 Built by Chris + Lloyd.
