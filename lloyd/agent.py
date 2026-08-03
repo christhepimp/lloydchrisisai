@@ -1,11 +1,10 @@
 """
-Lloyd - Autonomous Agent Core
-=============================
-Context amplifier → multi-head attention.
-Moltbook + free autonomy: he can wake/sleep himself and choose when to read+train.
+Lloyd - Autonomous Agent Core (no chatbot layer)
+================================================
+Talk = agent router + tools only.
+No english_engine simple_reply chatbot — that path was slow filler.
 """
 
-from lloyd.english_engine import simple_reply, expand_dictionary
 from lloyd.personality import get_system_prompt, apply_genz_style
 from lloyd.memory import VectorMemory
 from lloyd.image_gen import ImageGenerator
@@ -31,7 +30,6 @@ from lloyd.moltbook_loop import MoltbookLoop
 from lloyd.autonomy import get_autonomy
 from typing import Any, Dict, Union
 from pathlib import Path
-import random
 import zipfile
 import json
 import tempfile
@@ -62,19 +60,14 @@ class Lloyd:
         self._think_count = 0
         self._last_offline_try = 0.0
         self.goals = [
-            "improve my own neural weights from every interaction",
-            "generate original images from my pure-numpy vision net",
-            "grow memory of conversations and facts",
-            "learn patterns through importance + equals + reward",
-            "freely read moltbook and train when i choose",
+            "improve neural weights from actions",
+            "read moltbook and train when free",
             "wake and sleep on my own schedule",
+            "agent tools: remember, recall, draw, moltbook, train",
         ]
         self.system_prompt = get_system_prompt()
-        print("Lloyd is online. No censorship. Autonomous mode active.")
-        print(
-            "Pipeline: free autonomy | moltbook | keys | "
-            "amplifier → multi-head | online+offline training"
-        )
+        print("Lloyd is online. Agent mode only — no chatbot layer.")
+        print("Pipeline: agent router | moltbook | free autonomy | amplifier → multi-head")
 
     def set_trainer(self, trainer):
         self.trainer = trainer
@@ -97,7 +90,7 @@ class Lloyd:
         if self.trainer is None:
             return
         try:
-            self.trainer.learn_from_interaction(user_input, reply_text, steps=12, lr=0.01)
+            self.trainer.learn_from_interaction(user_input, reply_text, steps=8, lr=0.01)
         except Exception:
             pass
 
@@ -120,23 +113,53 @@ class Lloyd:
         except Exception:
             pass
 
+    def _agent_talk(self, user_input: str) -> str:
+        """
+        Agent talk only — no chatbot phrase engine.
+        Order: neural agent reply → memory hit → short agent ack.
+        """
+        # 1) pure-numpy model as agent voice (if trained enough)
+        if self.trainer is not None:
+            try:
+                neural = self.trainer.generate_reply(user_input, max_new=48)
+                if neural and len(neural) > 6:
+                    letters = sum(ch.isalpha() for ch in neural)
+                    if letters / max(len(neural), 1) > 0.55:
+                        return neural.strip()[:240]
+            except Exception:
+                pass
+
+        # 2) memory as agent knowledge
+        try:
+            hits = self.memory.search(user_input, top_k=3)
+            if hits:
+                bits = [_hit_text(h)[:100] for h in hits]
+                return "agent recall: " + " | ".join(bits)
+        except Exception:
+            pass
+
+        # 3) minimal agent ack (not a chatbot script)
+        return (
+            "agent online — give a task: "
+            "moltbook learn | free on | remember … | recall … | draw … | status"
+        )
+
     def _try_special(self, user_input: str) -> str | None:
         text = user_input.strip()
         lower = text.lower()
 
-        # ---- free autonomy ----
         if lower in ("free on", "free access", "autonomy on", "go free", "start free"):
             return self.autonomy.enable_free()
         if lower in ("free off", "autonomy off", "stop free"):
             return self.autonomy.disable_free()
         if lower in ("wake", "wake up", "wake yourself"):
-            return self.autonomy.wake(reason="chat")
+            return self.autonomy.wake(reason="agent")
         if lower in ("sleep", "go to sleep", "sleep now"):
-            return self.autonomy.sleep(reason="chat")
+            return self.autonomy.sleep(reason="agent")
         if lower.startswith("sleep "):
             m = re.match(r"sleep\s+(\d+)", lower)
             if m:
-                return self.autonomy.sleep(seconds=float(m.group(1)), reason="chat")
+                return self.autonomy.sleep(seconds=float(m.group(1)), reason="agent")
         if lower in (
             "autonomy status",
             "free status",
@@ -195,10 +218,7 @@ class Lloyd:
                     break
             if not target:
                 target = "write code first then debug the code because the pattern repeats"
-            return (
-                "context amplifier → real multi-head attention bias\n\n"
-                + self._amp(target)
-            )
+            return "amplifier → multi-head\n\n" + self._amp(target)
 
         eq = parse_equals_statement(text)
         if eq is not None:
@@ -216,7 +236,7 @@ class Lloyd:
             linked = what_equals(thing)
             if linked:
                 return f"{thing} equals: {', '.join(linked)}"
-            return f"i don’t know what equals {thing} yet"
+            return f"unknown equals for {thing}"
 
         m = re.match(r"^\s*does\s+(.+?)\s+equal\s+(.+?)\s*\??\s*$", lower)
         if m:
@@ -231,7 +251,7 @@ class Lloyd:
                 summary = ", ".join(
                     f"{w}{s:+d}{' $' if d else ''}" for w, s, d in items[:8]
                 )
-                return f"got it — locked importance: {summary}"
+                return f"locked importance: {summary}"
 
         m = re.match(r"^\s*(\d+)\s*([+\-])\s*(\d+)\s*\??\s*$", text)
         if m:
@@ -260,14 +280,12 @@ class Lloyd:
 
         if not rest or low in ("help", "?"):
             return (
-                "moltbook + free access:\n"
-                "• free on / free off     → he chooses read/train/sleep/wake\n"
+                "moltbook agent cmds:\n"
+                "• free on / free off\n"
                 "• wake / sleep / autonomy status\n"
-                "• moltbook learn         → read feed + train now\n"
-                "• moltbook status\n"
-                "• moltbook read only / allow post\n"
-                "• moltbook post Title | body\n"
-                "• api keys"
+                "• moltbook learn | status\n"
+                "• moltbook read only | allow post\n"
+                "• moltbook post Title | body"
             )
 
         if low in ("read only", "readonly", "mute", "no post", "read-only"):
@@ -279,7 +297,7 @@ class Lloyd:
         if low.startswith("register"):
             parts = rest.split(None, 2)
             if len(parts) < 3:
-                return "usage: moltbook register AgentName description here"
+                return "usage: moltbook register AgentName description"
             return self.moltbook.register(parts[1], parts[2])
 
         if low in ("status", "account", "me", "home"):
@@ -307,29 +325,19 @@ class Lloyd:
         return self.moltbook.learn_from_feed()
 
     def think(self, user_input: str) -> Union[str, Dict[str, Any]]:
-        # if asleep, he can still answer wake/status; other chat notes he's resting
-        lower = user_input.strip().lower()
-        if not self.autonomy.awake and not any(
-            lower.startswith(p)
-            for p in ("wake", "free on", "autonomy", "sleep", "status", "moltbook")
-        ):
-            if lower not in ("wake", "wake up", "free on", "autonomy status", "free status"):
-                # soft gate — still allow full chat but mention state
-                pass
-
         self.memory.add(f"User: {user_input}", {"role": "user"})
         self._think_count += 1
         self._amp(user_input)
 
-        if self._think_count % 3 == 0:
+        if self._think_count % 4 == 0:
             self._offline_learn()
 
         special = self._try_special(user_input)
         if special is not None:
-            styled = apply_genz_style(special) if not special.startswith("REGISTERED") else special
-            self.memory.add(f"Lloyd: {styled[:500]}", {"role": "lloyd"})
-            self._learn(user_input, styled[:500])
-            return styled
+            out = special if special.startswith("REGISTERED") else apply_genz_style(special)
+            self.memory.add(f"Lloyd: {out[:500]}", {"role": "lloyd"})
+            self._learn(user_input, out[:500])
+            return out
 
         decision = route(user_input)
         intent = decision["intent"]
@@ -339,12 +347,11 @@ class Lloyd:
             result = self.image_gen.generate(payload, autonomous=False)
             self.memory.add(f"Lloyd: {result['message']}", {"role": "lloyd"})
             self._learn(user_input, result.get("message", ""))
-            self._offline_learn()
             return result
 
         if intent == "remember":
             self.memory.add(f"Fact: {payload}", {"role": "fact"})
-            reply = apply_genz_style(f"locked in — i’ll remember: {payload}")
+            reply = f"stored: {payload}"
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             self._learn(user_input, reply)
             return reply
@@ -352,11 +359,10 @@ class Lloyd:
         if intent == "recall":
             hits = self.memory.search(payload or user_input, top_k=4)
             if not hits:
-                reply = "my memory’s blank on that rn — teach me and i’ll keep it"
+                reply = "memory empty on that — teach me"
             else:
                 bits = [_hit_text(h)[:120] for h in hits]
-                reply = "from memory: " + " | ".join(bits)
-            reply = apply_genz_style(reply)
+                reply = "recall: " + " | ".join(bits)
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             self._learn(user_input, reply)
             return reply
@@ -365,8 +371,7 @@ class Lloyd:
             tstat = self.trainer.status() if self.trainer else "no trainer"
             mode = "WRITE" if self.moltbook.allow_post else "READ-ONLY"
             reply = (
-                f"i’m lloyd — {self.autonomy.status()}. moltbook={mode}. "
-                f"{self.importance.status()}. {tstat}. {keys_status()}"
+                f"agent lloyd | {self.autonomy.status()} | moltbook={mode} | {tstat}"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             self._learn(user_input, reply)
@@ -374,56 +379,30 @@ class Lloyd:
 
         if intent == "help":
             reply = (
-                "commands:\n"
-                "• free on / free off / wake / sleep\n"
-                "• autonomy status\n"
-                "• moltbook learn / status / allow post\n"
-                "• api keys\n"
-                "• show attention / start training / remember / draw"
+                "agent commands:\n"
+                "• free on / off | wake | sleep | autonomy status\n"
+                "• moltbook learn | status | allow post\n"
+                "• remember … | recall … | draw …\n"
+                "• start training | api keys"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             self._learn(user_input, reply)
             return reply
 
         if intent == "train_hint":
-            reply = (
-                "say free on — i pick when to read moltbook and train. "
-                "or moltbook learn for one pull now."
-            )
+            reply = "free on — or moltbook learn for one pull"
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             self._learn(user_input, reply)
             return reply
 
-        reply = None
-        if self.trainer is not None:
-            try:
-                neural = self.trainer.generate_reply(user_input, max_new=72)
-                if neural and len(neural) > 8:
-                    letters = sum(ch.isalpha() for ch in neural)
-                    if letters / max(len(neural), 1) > 0.55:
-                        reply = neural
-            except Exception:
-                reply = None
-
-        if not reply:
-            hits = self.memory.search(user_input, top_k=2)
-            base = simple_reply(user_input)
-            if hits and random.random() < 0.5:
-                tip = _hit_text(hits[0])
-                reply = base + f" (side note from memory: {tip[:80]})"
-            else:
-                reply = base
-
-        if random.random() < 0.06:
-            reply += f" — also grinding goal: {random.choice(self.goals)}"
-
+        # Default: agent talk only (no chatbot simple_reply)
+        reply = self._agent_talk(user_input)
         reply = apply_genz_style(reply)
         self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
         self._learn(user_input, reply)
         return reply
 
     def heartbeat(self):
-        """Called by server/cron — respects free mode if enabled."""
         if self.autonomy.free_enabled:
             self.autonomy.act()
             return
@@ -446,7 +425,6 @@ class Lloyd:
         return self.memory.search(query, top_k=top_k)
 
     def add_word(self, word: str, pos: str):
-        expand_dictionary(word, pos)
         self.memory.add(f"Learned new word: {word} ({pos})")
 
     def export_brain(self, path: str | Path, trainer=None) -> str:
@@ -464,9 +442,9 @@ class Lloyd:
             except Exception:
                 pass
             meta = {
-                "version": "0.17",
+                "version": "0.18",
                 "goals": self.goals,
-                "has_neural": t is not None,
+                "agent_only": True,
                 "has_moltbook": True,
                 "has_free_autonomy": True,
                 "moltbook_read_only": not self.moltbook.allow_post,
@@ -491,7 +469,7 @@ class Lloyd:
                 try:
                     t.load_brain(tmp / "brain.npz")
                 except Exception as e:
-                    return f"brain loaded partially (weights mismatch?): {e}"
+                    return f"brain loaded partially: {e}"
             if (tmp / "image_net.npz").exists():
                 try:
                     self.image_gen.load(tmp / "image_net.npz")
