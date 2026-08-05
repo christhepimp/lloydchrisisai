@@ -6,6 +6,7 @@ Full agent mind connection:
   /vision        — image → memory + optional pattern learn
   /audio         — transcript / audio note → think
   /textfiction/* — play + learn from Text Fiction APK sessions
+  /emu/*         — ARMSX2 / PS2: vision, audio, controller actions, agent play/learn
   /status        — agent health
   /upload /train /train_images /export /import — existing
 """
@@ -18,6 +19,7 @@ import os
 import tempfile
 import base64
 import time
+from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -29,9 +31,18 @@ try:
 except ImportError:
     from text_fiction_bridge import TextFictionBridge  # type: ignore
 
+try:
+    from lloyd.emu_bridge import EmuBridge
+except ImportError:
+    from emu_bridge import EmuBridge  # type: ignore
+
 trainer = LloydTrainer()
 lloyd = Lloyd(trainer=trainer)
 tf_bridge = TextFictionBridge(lloyd=lloyd, trainer=trainer)
+emu_bridge = EmuBridge(lloyd=lloyd, trainer=trainer)
+
+# Let agent reach the emu bridge for chat commands
+lloyd.emu_bridge = emu_bridge
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -50,7 +61,9 @@ class LloydHandler(SimpleHTTPRequestHandler):
         )
 
     def do_GET(self):
-        path = self.path.split("?")[0]
+        parsed = urlparse(self.path)
+        path = parsed.path
+        qs = parse_qs(parsed.query)
 
         if path == "/" or path == "/index.html":
             self.path = "/index.html"
@@ -66,6 +79,7 @@ class LloydHandler(SimpleHTTPRequestHandler):
                     "vision": "online",
                     "audio": "online",
                     "textfiction": tf_bridge.status(),
+                    "emu": emu_bridge.status(),
                     "trainer": tstat,
                     "autonomy": lloyd.autonomy.status() if hasattr(lloyd, "autonomy") else "n/a",
                     "ts": time.time(),
@@ -95,6 +109,23 @@ class LloydHandler(SimpleHTTPRequestHandler):
 
         if path == "/textfiction/status":
             self._json_response(tf_bridge.status())
+            return
+
+        # ---- ARMSX2 / PS2 emu API ----
+        if path == "/emu/status":
+            self._json_response(emu_bridge.status())
+            return
+
+        if path == "/emu/state":
+            sid = (qs.get("session") or ["default"])[0]
+            sess = emu_bridge.get_session(sid)
+            self._json_response(sess.summary())
+            return
+
+        if path == "/emu/inputs":
+            sid = (qs.get("session") or ["default"])[0]
+            max_n = int((qs.get("max") or ["16"])[0])
+            self._json_response(emu_bridge.drain_inputs(sid, max_n=max_n))
             return
 
         return super().do_GET()
@@ -250,6 +281,95 @@ class LloydHandler(SimpleHTTPRequestHandler):
                 self._json_response({"error": str(e)}, status=500)
             return
 
+        # ---- ARMSX2 / PS2 emu API ----
+        if path == "/emu/frame":
+            try:
+                data = json.loads(body.decode()) if body else {}
+                sid = data.get("session") or data.get("session_id") or "default"
+                out = emu_bridge.observe_vision(
+                    session_id=sid,
+                    game=data.get("game") or "",
+                    image_b64=data.get("image_b64") or data.get("image") or "",
+                    width=int(data.get("width") or 0),
+                    height=int(data.get("height") or 0),
+                    caption=data.get("caption") or data.get("note") or "",
+                    fmt=data.get("fmt") or "jpeg",
+                )
+                self._json_response({**out, "agent": True})
+            except Exception as e:
+                self._json_response({"error": str(e)}, status=500)
+            return
+
+        if path == "/emu/audio":
+            try:
+                data = json.loads(body.decode()) if body else {}
+                sid = data.get("session") or data.get("session_id") or "default"
+                out = emu_bridge.observe_audio(
+                    session_id=sid,
+                    transcript=data.get("transcript") or data.get("text") or "",
+                    level=float(data.get("level") or 0),
+                    note=data.get("note") or "",
+                    pcm_b64=data.get("pcm_b64") or "",
+                )
+                self._json_response({**out, "agent": True})
+            except Exception as e:
+                self._json_response({"error": str(e)}, status=500)
+            return
+
+        if path == "/emu/action":
+            try:
+                data = json.loads(body.decode()) if body else {}
+                sid = data.get("session") or data.get("session_id") or "default"
+                out = emu_bridge.act(
+                    session_id=sid,
+                    buttons=data.get("buttons") or [],
+                    sticks=data.get("sticks") or {},
+                    hold_ms=int(data.get("hold_ms") or 50),
+                    text=data.get("text") or data.get("reason") or "",
+                )
+                self._json_response({**out, "agent": True})
+            except Exception as e:
+                self._json_response({"error": str(e)}, status=500)
+            return
+
+        if path == "/emu/decide":
+            try:
+                data = json.loads(body.decode()) if body else {}
+                sid = data.get("session") or data.get("session_id") or "default"
+                goal = data.get("goal") or ""
+                out = emu_bridge.decide(session_id=sid, goal=goal)
+                self._json_response({**out, "agent": True})
+            except Exception as e:
+                self._json_response({"error": str(e)}, status=500)
+            return
+
+        if path == "/emu/play":
+            try:
+                data = json.loads(body.decode()) if body else {}
+                sid = data.get("session") or data.get("session_id") or "default"
+                goal = data.get("goal") or ""
+                out = emu_bridge.play_step(session_id=sid, goal=goal)
+                self._json_response({**out, "agent": True})
+            except Exception as e:
+                self._json_response({"error": str(e)}, status=500)
+            return
+
+        if path == "/emu/learn":
+            try:
+                data = json.loads(body.decode()) if body else {}
+                sid = data.get("session") or data.get("session_id") or "default"
+                steps = int(data.get("steps") or 24)
+                out = emu_bridge.learn(session_id=sid, steps=steps)
+                try:
+                    trainer.save_brain(BRAIN_DIR / "latest_brain.npz")
+                    lloyd.memory.save(str(BRAIN_DIR / "latest_memory.json"))
+                except Exception:
+                    pass
+                self._json_response({**out, "agent": True})
+            except Exception as e:
+                self._json_response({"error": str(e)}, status=500)
+            return
+
         if path == "/upload":
             try:
                 content_type = self.headers.get("Content-Type", "")
@@ -388,7 +508,8 @@ def run():
 
     server = HTTPServer(("0.0.0.0", port), LloydHandler)
     print(f"Lloyd agent mind live on port {port}")
-    print("Endpoints: /chat /vision /audio /textfiction/* /status /export ...")
+    print("Endpoints: /chat /vision /audio /emu/* /textfiction/* /status /export ...")
+    print("ARMSX2 bridge: POST /emu/frame /emu/audio /emu/action /emu/decide /emu/play /emu/learn")
     server.serve_forever()
 
 

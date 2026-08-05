@@ -56,6 +56,7 @@ class Lloyd:
         self.training = training
         self.moltbook = MoltbookLoop(self)
         self.autonomy = get_autonomy(self)
+        self.emu_bridge = None  # set by server.py when EmuBridge is live
         self.last_amp_report = ""
         self._think_count = 0
         self._last_offline_try = 0.0
@@ -64,10 +65,11 @@ class Lloyd:
             "read moltbook and train when free",
             "wake and sleep on my own schedule",
             "agent tools: remember, recall, draw, moltbook, train",
+            "play PS2 via ARMSX2: see hear act learn",
         ]
         self.system_prompt = get_system_prompt()
         print("Lloyd is online. Agent mode only — no chatbot layer.")
-        print("Pipeline: agent router | moltbook | free autonomy | amplifier → multi-head")
+        print("Pipeline: agent router | moltbook | free autonomy | amplifier → multi-head | emu")
 
     def set_trainer(self, trainer):
         self.trainer = trainer
@@ -141,7 +143,8 @@ class Lloyd:
         # 3) minimal agent ack (not a chatbot script)
         return (
             "agent online — give a task: "
-            "moltbook learn | free on | remember … | recall … | draw … | status"
+            "moltbook learn | free on | remember … | recall … | draw … | "
+            "ps2 play | ps2 learn | status"
         )
 
     def _try_special(self, user_input: str) -> str | None:
@@ -175,6 +178,12 @@ class Lloyd:
 
         if lower.startswith("moltbook") or lower.startswith("molt "):
             return self._moltbook_cmd(text)
+
+        # ---- PS2 / ARMSX2 chat commands ----
+        if lower.startswith("ps2") or lower.startswith("emu ") or lower in (
+            "play ps2", "ps2 play", "ps2 learn", "emu status", "ps2 status"
+        ):
+            return self._ps2_cmd(text)
 
         if lower in ("start training", "start train", "begin training", "train loop"):
             return self.training.start()
@@ -274,6 +283,51 @@ class Lloyd:
 
         return None
 
+    def _ps2_cmd(self, text: str) -> str:
+        """Chat surface for ARMSX2 / PS2 agent loop."""
+        if self.emu_bridge is None:
+            return "emu bridge offline — start server.py so /emu/* is live"
+
+        rest = re.sub(r"^(ps2|emu)\s+", "", text.strip(), flags=re.I).strip()
+        low = rest.lower() if rest else text.lower()
+
+        if not rest or low in ("help", "?", "commands"):
+            return (
+                "ps2 / emu agent cmds:\n"
+                "• ps2 status — bridge + sessions\n"
+                "• ps2 play [goal] — one decide+act step\n"
+                "• ps2 learn — train on trajectory\n"
+                "• ps2 decide [goal] — choose action only\n"
+                "HTTP under the hood: /emu/frame /emu/audio /emu/action /emu/play /emu/learn"
+            )
+
+        if low in ("status", "emu status", "ps2 status") or "status" in low:
+            st = self.emu_bridge.status()
+            sess = st.get("sessions") or {}
+            n = len(sess)
+            learns = st.get("total_learns", 0)
+            return f"ARMSX2 bridge online | sessions={n} | learns={learns} | backend={st.get('backend')}"
+
+        if low.startswith("learn") or low == "ps2 learn":
+            out = self.emu_bridge.learn(session_id="default", steps=24)
+            return out.get("message") or str(out)
+
+        if low.startswith("play") or low.startswith("decide") or low in ("play ps2", "ps2 play"):
+            goal = re.sub(r"^(play|decide)\s+", "", rest, flags=re.I).strip()
+            if low.startswith("decide"):
+                out = self.emu_bridge.decide(session_id="default", goal=goal)
+            else:
+                out = self.emu_bridge.play_step(session_id="default", goal=goal or "progress")
+            action = (out.get("decision") or out).get("action") or out.get("action") or {}
+            btns = action.get("buttons") or []
+            reason = action.get("reason") or ""
+            return f"ps2 act: {btns} | {reason}"
+
+        return (
+            "ps2 cmds: status | play [goal] | learn | decide [goal]\n"
+            "push frames via POST /emu/frame first"
+        )
+
     def _moltbook_cmd(self, text: str) -> str:
         rest = re.sub(r"^(moltbook|molt)\s+", "", text.strip(), flags=re.I).strip()
         low = rest.lower()
@@ -370,8 +424,9 @@ class Lloyd:
         if intent == "status":
             tstat = self.trainer.status() if self.trainer else "no trainer"
             mode = "WRITE" if self.moltbook.allow_post else "READ-ONLY"
+            emu = "emu=on" if self.emu_bridge else "emu=off"
             reply = (
-                f"agent lloyd | {self.autonomy.status()} | moltbook={mode} | {tstat}"
+                f"agent lloyd | {self.autonomy.status()} | moltbook={mode} | {emu} | {tstat}"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             self._learn(user_input, reply)
@@ -382,6 +437,7 @@ class Lloyd:
                 "agent commands:\n"
                 "• free on / off | wake | sleep | autonomy status\n"
                 "• moltbook learn | status | allow post\n"
+                "• ps2 status | ps2 play [goal] | ps2 learn\n"
                 "• remember … | recall … | draw …\n"
                 "• start training | api keys"
             )
@@ -390,7 +446,7 @@ class Lloyd:
             return reply
 
         if intent == "train_hint":
-            reply = "free on — or moltbook learn for one pull"
+            reply = "free on — or moltbook learn for one pull — or ps2 learn after frames"
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             self._learn(user_input, reply)
             return reply
@@ -442,11 +498,12 @@ class Lloyd:
             except Exception:
                 pass
             meta = {
-                "version": "0.18",
+                "version": "0.19",
                 "goals": self.goals,
                 "agent_only": True,
                 "has_moltbook": True,
                 "has_free_autonomy": True,
+                "has_emu_bridge": True,
                 "moltbook_read_only": not self.moltbook.allow_post,
                 "total_reward": self.rewards.total_reward,
             }
