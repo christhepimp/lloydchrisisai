@@ -7,6 +7,9 @@ on:
       - "textfiction-lloyd/**"
       - ".github/workflows/build-lloyd-textfiction.yml"
 
+# Classic Android build — no Gradle / AGP.
+# aapt package resources → javac sources → d8 dex → apksigner
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -25,120 +28,54 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android platform 28 + build-tools
+      - name: Install platform-28 + build-tools
         run: |
           set -e
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platforms;android-28" "build-tools;28.0.3" "platform-tools"
-          sdkmanager --list_installed | grep -E "platforms;android-28|build-tools;28" || true
+          export ANDROID_HOME="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "BT=$ANDROID_HOME/build-tools/28.0.3" >> $GITHUB_ENV
+          echo "PLATFORM=$ANDROID_HOME/platforms/android-28/android.jar" >> $GITHUB_ENV
+          ls "$ANDROID_HOME/platforms/android-28/android.jar"
+          ls "$ANDROID_HOME/build-tools/28.0.3/aapt"
+          ls "$ANDROID_HOME/build-tools/28.0.3/d8"
 
-      - name: Clone official TextFiction source
-        run: |
-          git clone --depth 1 https://github.com/onyxbits/TextFiction.git /tmp/TextFiction
-
-      - name: Create Gradle project
+      - name: Clone TextFiction + support libs
         run: |
           set -e
-          mkdir -p app/src/main/java app/src/main/res app/src/main/assets
-          cp -a /tmp/TextFiction/src/de app/src/main/java/
-          cp -a /tmp/TextFiction/res/. app/src/main/res/
-          cp -a /tmp/TextFiction/assets/. app/src/main/assets/ 2>/dev/null || true
+          git clone --depth 1 https://github.com/onyxbits/TextFiction.git work
+          mkdir -p libs gen classes dex out
 
-          cat > settings.gradle << 'EOF'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          rootProject.name = "LloydTextFiction"
-          include ':app'
-          EOF
+          # Support library AARs → jars (support-v4 pulls most of what FragmentActivity needs)
+          for art in support-v4:28.0.0 support-compat:28.0.0 support-fragment:28.0.0 support-core-utils:28.0.0 support-core-ui:28.0.0 support-annotations:28.0.0; do
+            name="${art%%:*}"
+            ver="${art##*:}"
+            url="https://repo1.maven.org/maven2/com/android/support/${name}/${ver}/${name}-${ver}.aar"
+            echo "fetch $url"
+            curl -fsSL -o "/tmp/${name}.aar" "$url" || curl -fsSL -o "/tmp/${name}.aar" \
+              "https://dl.google.com/dl/android/maven2/com/android/support/${name}/${ver}/${name}-${ver}.aar"
+            unzip -p "/tmp/${name}.aar" classes.jar > "libs/${name}.jar"
+          done
+          # appcompat optional — some themes may need it
+          curl -fsSL -o /tmp/appcompat.aar \
+            https://repo1.maven.org/maven2/com/android/support/appcompat-v7/28.0.0/appcompat-v7-28.0.0.aar \
+            || curl -fsSL -o /tmp/appcompat.aar \
+            https://dl.google.com/dl/android/maven2/com/android/support/appcompat-v7/28.0.0/appcompat-v7-28.0.0.aar
+          unzip -p /tmp/appcompat.aar classes.jar > libs/appcompat-v7.jar
+          ls -la libs/
 
-          cat > build.gradle << 'EOF'
-          plugins {
-              id 'com.android.application' version '7.4.2' apply false
-          }
-          EOF
-
-          cat > gradle.properties << 'EOF'
-          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-          android.useAndroidX=false
-          android.enableJetifier=false
-          android.nonTransitiveRClass=false
-          android.defaults.buildfeatures.buildconfig=true
-          EOF
-
-          cat > app/build.gradle << 'EOF'
-          plugins {
-              id 'com.android.application'
-          }
-
-          android {
-              compileSdkVersion 28
-              buildToolsVersion "28.0.3"
-
-              defaultConfig {
-                  applicationId "ai.lloyd.textfiction"
-                  minSdkVersion 16
-                  targetSdkVersion 28
-                  versionCode 12
-                  versionName "2.7-lloyd"
-              }
-
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_1_8
-                  targetCompatibility JavaVersion.VERSION_1_8
-              }
-
-              buildTypes {
-                  debug { minifyEnabled false }
-                  release { minifyEnabled false }
-              }
-
-              lintOptions {
-                  abortOnError false
-                  checkReleaseBuilds false
-              }
-
-              aaptOptions {
-                  cruncherEnabled false
-                  noCompress 'z3', 'z5', 'z8', 'zblorb'
-              }
-          }
-
-          dependencies {
-              implementation 'com.android.support:support-v4:28.0.0'
-              implementation 'com.android.support:appcompat-v7:28.0.0'
-              implementation 'com.android.support:support-compat:28.0.0'
-              implementation 'com.android.support:support-fragment:28.0.0'
-          }
-          EOF
-
-          echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
-          ls -la app/src/main/java/de/onyxbits/textfiction/ | head
-
-      - name: Install LloydAgentApi
+      - name: Install LloydAgentApi + patch GameActivity
         run: |
-          mkdir -p app/src/main/java/de/onyxbits/textfiction/lloyd
+          set -e
+          mkdir -p work/src/de/onyxbits/textfiction/lloyd
           cp textfiction-lloyd/src/de/onyxbits/textfiction/lloyd/LloydAgentApi.java \
-             app/src/main/java/de/onyxbits/textfiction/lloyd/
+             work/src/de/onyxbits/textfiction/lloyd/
 
-      - name: Patch GameActivity for Lloyd API
-        run: |
           python3 << 'PY'
           from pathlib import Path
           import re
-
-          p = Path("app/src/main/java/de/onyxbits/textfiction/GameActivity.java")
+          p = Path("work/src/de/onyxbits/textfiction/GameActivity.java")
           text = p.read_text(encoding="utf-8", errors="replace")
 
           if "lloyd.LloydAgentApi" not in text:
@@ -146,196 +83,238 @@ jobs:
                   "import de.onyxbits.textfiction.input.InputProcessor;",
                   "import de.onyxbits.textfiction.input.InputProcessor;\nimport de.onyxbits.textfiction.lloyd.LloydAgentApi;",
               )
-              print("+ import LloydAgentApi")
 
           if "private LloydAgentApi lloydApi" not in text:
               text = text.replace(
                   "private ProgressBar loading;",
-                  "private ProgressBar loading;\n\n\t/** Lloyd autonomous agent HTTP API (port 8765). */\n\tprivate LloydAgentApi lloydApi;",
+                  "private ProgressBar loading;\n\n\t/** Lloyd agent HTTP API port 8765. */\n\tprivate LloydAgentApi lloydApi;",
               )
-              print("+ lloydApi field")
 
           if "lloydApi.start" not in text:
               pattern = re.compile(
                   r"([ \t]*)speaker = new TextToSpeech\(this, this\);\s*"
                   r"onSharedPreferenceChanged\(prefs, \"\"\);\s*"
-                  r"dimSoftButtonsIfPossible\(\);\s*"
-                  r"\}",
-                  re.MULTILINE,
+                  r"dimSoftButtonsIfPossible\(\);\s*\}",
+                  re.M,
               )
-              m = pattern.search(text)
-              if not m:
+              if not pattern.search(text):
                   raise SystemExit("onCreate anchor missing")
-              indent = m.group(1) or "\t\t"
-              replacement = (
-                  f"{indent}speaker = new TextToSpeech(this, this);\n"
-                  f"{indent}onSharedPreferenceChanged(prefs, \"\");\n"
-                  f"{indent}dimSoftButtonsIfPossible();\n\n"
-                  f"{indent}lloydApi = new LloydAgentApi(LloydAgentApi.DEFAULT_PORT);\n"
-                  f"{indent}final GameActivity self = this;\n"
-                  f"{indent}lloydApi.setCommandSink(new LloydAgentApi.CommandSink() {{\n"
-                  f"{indent}\t@Override\n"
-                  f"{indent}\tpublic void submitCommand(final String command) {{\n"
-                  f"{indent}\t\tself.runOnUiThread(new Runnable() {{\n"
-                  f"{indent}\t\t\t@Override\n"
-                  f"{indent}\t\t\tpublic void run() {{\n"
-                  f"{indent}\t\t\t\tif (command != null && command.length() > 0) {{\n"
-                  f"{indent}\t\t\t\t\texecuteCommand((command + \"\\n\").toCharArray());\n"
-                  f"{indent}\t\t\t\t}}\n"
-                  f"{indent}\t\t\t}}\n"
-                  f"{indent}\t\t}});\n"
-                  f"{indent}\t}}\n"
-                  f"{indent}}});\n"
-                  f"{indent}lloydApi.start();\n"
-                  f"{indent}Log.i(\"LloydAgentApi\", \"listening on port \" + LloydAgentApi.DEFAULT_PORT);\n"
+              ind = pattern.search(text).group(1) or "\t\t"
+              rep = (
+                  f"{ind}speaker = new TextToSpeech(this, this);\n"
+                  f"{ind}onSharedPreferenceChanged(prefs, \"\");\n"
+                  f"{ind}dimSoftButtonsIfPossible();\n\n"
+                  f"{ind}lloydApi = new LloydAgentApi(LloydAgentApi.DEFAULT_PORT);\n"
+                  f"{ind}final GameActivity self = this;\n"
+                  f"{ind}lloydApi.setCommandSink(new LloydAgentApi.CommandSink() {{\n"
+                  f"{ind}\t@Override public void submitCommand(final String command) {{\n"
+                  f"{ind}\t\tself.runOnUiThread(new Runnable() {{\n"
+                  f"{ind}\t\t\t@Override public void run() {{\n"
+                  f"{ind}\t\t\t\tif (command != null && command.length() > 0)\n"
+                  f"{ind}\t\t\t\t\texecuteCommand((command + \"\\n\").toCharArray());\n"
+                  f"{ind}\t\t\t}}\n"
+                  f"{ind}\t\t}});\n"
+                  f"{ind}\t}}\n"
+                  f"{ind}}});\n"
+                  f"{ind}lloydApi.start();\n"
+                  f"{ind}Log.i(\"LloydAgentApi\", \"listening on port \" + LloydAgentApi.DEFAULT_PORT);\n"
                   f"\t}}"
               )
-              text = pattern.sub(replacement, text, count=1)
-              print("+ onCreate lloydApi.start")
+              text = pattern.sub(rep, text, count=1)
 
           if "lloydApi.stop" not in text:
               pattern = re.compile(
                   r"([ \t]*)public void onDestroy\(\) \{\s*"
                   r"prefs\.unregisterOnSharedPreferenceChangeListener\(this\);",
-                  re.MULTILINE,
+                  re.M,
               )
-              m = pattern.search(text)
-              if not m:
+              if not pattern.search(text):
                   raise SystemExit("onDestroy anchor missing")
-              indent = m.group(1) or "\t"
-              replacement = (
-                  f"{indent}public void onDestroy() {{\n"
-                  f"{indent}\tif (lloydApi != null) {{\n"
-                  f"{indent}\t\tlloydApi.stop();\n"
-                  f"{indent}\t\tlloydApi = null;\n"
-                  f"{indent}\t}}\n"
-                  f"{indent}\tprefs.unregisterOnSharedPreferenceChangeListener(this);"
+              ind = pattern.search(text).group(1) or "\t"
+              rep = (
+                  f"{ind}public void onDestroy() {{\n"
+                  f"{ind}\tif (lloydApi != null) {{ lloydApi.stop(); lloydApi = null; }}\n"
+                  f"{ind}\tprefs.unregisterOnSharedPreferenceChangeListener(this);"
               )
-              text = pattern.sub(replacement, text, count=1)
-              print("+ onDestroy lloydApi.stop")
+              text = pattern.sub(rep, text, count=1)
 
           if "publishState" not in text:
               pattern = re.compile(
                   r"([ \t]*)flipView\(showLower\);\s*"
                   r"figurePromptStyle\(\);\s*"
-                  r"figureMenuState\(\);\s*"
-                  r"\}\s*"
+                  r"figureMenuState\(\);\s*\}\s*"
                   r"/\*\*\s*\* Show the correct prompt\.\s*\*/\s*"
                   r"private void figurePromptStyle\(\) \{",
-                  re.MULTILINE,
+                  re.M,
               )
-              m = pattern.search(text)
-              if not m:
+              if not pattern.search(text):
                   raise SystemExit("publishResult anchor missing")
-              indent = m.group(1) or "\t\t"
-              replacement = (
-                  f"{indent}flipView(showLower);\n"
-                  f"{indent}figurePromptStyle();\n"
-                  f"{indent}figureMenuState();\n\n"
-                  f"{indent}if (lloydApi != null && retainerFragment != null && retainerFragment.engine != null) {{\n"
-                  f"{indent}\tStringBuilder story = new StringBuilder();\n"
-                  f"{indent}\ttry {{\n"
-                  f"{indent}\t\tfor (int i = 0; i < retainerFragment.messageBuffer.size(); i++) {{\n"
-                  f"{indent}\t\t\tStoryItem item = retainerFragment.messageBuffer.get(i);\n"
-                  f"{indent}\t\t\tif (item != null && item.message != null) {{\n"
-                  f"{indent}\t\t\t\tif (story.length() > 0) story.append(\"\\n\");\n"
-                  f"{indent}\t\t\t\tstory.append(item.message.toString());\n"
-                  f"{indent}\t\t\t}}\n"
-                  f"{indent}\t\t}}\n"
-                  f"{indent}\t}} catch (Exception e) {{\n"
-                  f"{indent}\t\tLog.w(\"LloydAgentApi\", e);\n"
-                  f"{indent}\t}}\n"
-                  f"{indent}\tboolean waiting = retainerFragment.engine.getRunState() == ZMachine.STATE_WAIT_CMD;\n"
-                  f"{indent}\tlloydApi.publishState(story.toString(), retainerFragment.upperWindow, waiting);\n"
-                  f"{indent}}}\n"
+              ind = pattern.search(text).group(1) or "\t\t"
+              rep = (
+                  f"{ind}flipView(showLower);\n"
+                  f"{ind}figurePromptStyle();\n"
+                  f"{ind}figureMenuState();\n"
+                  f"{ind}if (lloydApi != null && retainerFragment != null && retainerFragment.engine != null) {{\n"
+                  f"{ind}\tStringBuilder story = new StringBuilder();\n"
+                  f"{ind}\ttry {{\n"
+                  f"{ind}\t\tfor (int i = 0; i < retainerFragment.messageBuffer.size(); i++) {{\n"
+                  f"{ind}\t\t\tStoryItem item = retainerFragment.messageBuffer.get(i);\n"
+                  f"{ind}\t\t\tif (item != null && item.message != null) {{\n"
+                  f"{ind}\t\t\t\tif (story.length() > 0) story.append(\"\\n\");\n"
+                  f"{ind}\t\t\t\tstory.append(item.message.toString());\n"
+                  f"{ind}\t\t\t}}\n"
+                  f"{ind}\t\t}}\n"
+                  f"{ind}\t}} catch (Exception e) {{ Log.w(\"LloydAgentApi\", e); }}\n"
+                  f"{ind}\tboolean waiting = retainerFragment.engine.getRunState() == ZMachine.STATE_WAIT_CMD;\n"
+                  f"{ind}\tlloydApi.publishState(story.toString(), retainerFragment.upperWindow, waiting);\n"
+                  f"{ind}}}\n"
                   f"\t}}\n\n"
-                  f"\t/**\n"
-                  f"\t * Show the correct prompt.\n"
-                  f"\t */\n"
+                  f"\t/**\n\t * Show the correct prompt.\n\t */\n"
                   f"\tprivate void figurePromptStyle() {{"
               )
-              text = pattern.sub(replacement, text, count=1)
-              print("+ publishResult publishState")
+              text = pattern.sub(rep, text, count=1)
 
           p.write_text(text)
+          for n in ("LloydAgentApi", "lloydApi.start", "publishState"):
+              assert n in text, n
           print("GameActivity patched OK")
-          for needle in ("LloydAgentApi", "lloydApi.start", "lloydApi.stop", "publishState"):
-              if needle not in text:
-                  raise SystemExit(f"missing after patch: {needle}")
           PY
 
-      - name: Write AndroidManifest with INTERNET
+      - name: Write manifest (INTERNET + package id)
         run: |
-          cat > app/src/main/AndroidManifest.xml << 'XML'
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="de.onyxbits.textfiction">
-              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-              <uses-permission android:name="android.permission.INTERNET" />
-              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-              <application
-                  android:allowBackup="true"
-                  android:icon="@drawable/ic_launcher"
-                  android:label="@string/app_name"
-                  android:theme="@style/Nemo"
-                  android:usesCleartextTraffic="true">
-                  <activity
-                      android:name=".MainActivity"
-                      android:label="@string/app_name"
-                      android:launchMode="singleTask"
-                      android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                  </activity>
-                  <activity
-                      android:name="de.onyxbits.textfiction.GameActivity"
-                      android:label="@string/title_activity_game"
-                      android:parentActivityName=".MainActivity"
-                      android:windowSoftInputMode="stateAlwaysHidden"
-                      android:exported="false">
-                      <meta-data
-                          android:name="android.support.PARENT_ACTIVITY"
-                          android:value=".MainActivity" />
-                  </activity>
-                  <activity
-                      android:name="de.onyxbits.textfiction.SettingActivity"
-                      android:theme="@style/AppTheme"
-                      android:parentActivityName=".MainActivity"
-                      android:label="@string/title_activity_setting"
-                      android:exported="false">
-                      <meta-data
-                          android:name="android.support.PARENT_ACTIVITY"
-                          android:value=".MainActivity" />
-                  </activity>
-              </application>
-          </manifest>
-          XML
+          # Keep original package for R class; applicationId-like rename via package attr
+          # is limited without Gradle — keep de.onyxbits.textfiction package for resources.
+          python3 << 'PY'
+          from pathlib import Path
+          p = Path("work/AndroidManifest.xml")
+          t = p.read_text(encoding="utf-8", errors="replace")
+          if "INTERNET" not in t:
+              t = t.replace(
+                  '<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />',
+                  '<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />\n\t'
+                  '<uses-permission android:name="android.permission.INTERNET" />\n\t'
+                  '<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />',
+              )
+          # bump version so side-by-side is clear in About
+          t = t.replace('android:versionCode="11"', 'android:versionCode="12"')
+          t = t.replace('android:versionName="2.7"', 'android:versionName="2.7-lloyd"')
+          # allow cleartext for agent on LAN
+          if "usesCleartextTraffic" not in t:
+              t = t.replace(
+                  '<application',
+                  '<application android:usesCleartextTraffic="true"',
+                  1,
+              )
+          p.write_text(t)
+          print("manifest OK")
+          PY
 
-      - name: Setup Gradle 7.6.3
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: "7.6.3"
-          cache-disabled: true
-
-      - name: Build debug APK
+      - name: aapt generate R.java + package resources
         run: |
           set -e
-          export ANDROID_HOME="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "sdk.dir=$ANDROID_HOME" > local.properties
-          ls "$ANDROID_HOME/platforms" || true
-          gradle assembleDebug --no-daemon --stacktrace 2>&1 | tee /tmp/build.log
-          echo "==== last 100 lines ===="
-          tail -100 /tmp/build.log
-          ls -la app/build/outputs/apk/debug/ || (echo "APK missing"; exit 1)
+          "$BT/aapt" package -m \
+            -J gen \
+            -M work/AndroidManifest.xml \
+            -S work/res \
+            -I "$PLATFORM" \
+            --auto-add-overlay \
+            -f
+
+          # assets if any
+          ASSETS_ARG=()
+          if [ -d work/assets ] && [ "$(ls -A work/assets 2>/dev/null)" ]; then
+            ASSETS_ARG=(-A work/assets)
+          fi
+
+          "$BT/aapt" package -f \
+            -M work/AndroidManifest.xml \
+            -S work/res \
+            "${ASSETS_ARG[@]}" \
+            -I "$PLATFORM" \
+            --auto-add-overlay \
+            -F out/app-res.apk
+
+          echo "R.java:"
+          find gen -name 'R.java' | head
+          ls -la out/app-res.apk
+
+      - name: javac compile
+        run: |
+          set -e
+          CP="$PLATFORM"
+          for j in libs/*.jar; do CP="$CP:$j"; done
+
+          find work/src gen -name '*.java' > /tmp/sources.txt
+          wc -l /tmp/sources.txt
+
+          # Java 8 bytecode for old Android runtime
+          javac -source 1.8 -target 1.8 \
+            -bootclasspath "$PLATFORM" \
+            -classpath "$CP" \
+            -d classes \
+            @/tmp/sources.txt 2>&1 | tee /tmp/javac.log
+
+          # fail if no classes
+          find classes -name '*.class' | wc -l
+          test "$(find classes -name '*.class' | wc -l)" -gt 50
+
+      - name: d8 → classes.dex
+        run: |
+          set -e
+          find classes -name '*.class' > /tmp/classes.txt
+          # Also include support lib jars so FragmentActivity etc. are in the APK
+          "$BT/d8" \
+            --lib "$PLATFORM" \
+            --min-api 16 \
+            --output dex \
+            $(find classes -name '*.class') \
+            libs/*.jar
+
+          ls -la dex/
+          test -f dex/classes.dex
+
+      - name: Build + sign APK
+        run: |
+          set -e
+          # Merge res APK + dex
+          cp out/app-res.apk out/app-unsigned.apk
+          # aapt add expects relative path named classes.dex
+          cp dex/classes.dex classes.dex
+          "$BT/aapt" add out/app-unsigned.apk classes.dex
+          # multi-dex if present
+          if [ -f dex/classes2.dex ]; then
+            cp dex/classes2.dex classes2.dex
+            "$BT/aapt" add out/app-unsigned.apk classes2.dex
+          fi
+
+          "$BT/zipalign" -f 4 out/app-unsigned.apk out/app-aligned.apk
+
+          # Debug keystore
+          if [ ! -f debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Lloyd,OU=Lloyd,O=Lloyd,L=City,ST=ST,C=US"
+          fi
+
+          "$BT/apksigner" sign \
+            --ks debug.keystore \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out out/lloyd-textfiction-debug.apk \
+            out/app-aligned.apk
+
+          "$BT/apksigner" verify out/lloyd-textfiction-debug.apk
+          ls -la out/lloyd-textfiction-debug.apk
+          echo "APK ready"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: lloyd-textfiction-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: out/lloyd-textfiction-debug.apk
           retention-days: 30
           if-no-files-found: error
