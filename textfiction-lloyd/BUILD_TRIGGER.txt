@@ -1,0 +1,3 @@
+trigger=1
+reason=user requested gradle APK build
+time=2026-08-05
