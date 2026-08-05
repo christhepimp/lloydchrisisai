@@ -25,32 +25,51 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install Android platform 28 + build-tools
+        run: |
+          set -e
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-28" "build-tools;28.0.3" "platform-tools"
+          sdkmanager --list_installed | grep -E "platforms;android-28|build-tools;28" || true
+
       - name: Clone official TextFiction source
         run: |
           git clone --depth 1 https://github.com/onyxbits/TextFiction.git /tmp/TextFiction
+          echo "Source tree:"
+          find /tmp/TextFiction -maxdepth 3 -type d | head -40
 
       - name: Create Gradle project
         run: |
+          set -e
           mkdir -p app/src/main/java app/src/main/res app/src/main/assets
           cp -a /tmp/TextFiction/src/de app/src/main/java/
           cp -a /tmp/TextFiction/res/. app/src/main/res/
           cp -a /tmp/TextFiction/assets/. app/src/main/assets/ 2>/dev/null || true
 
+          # Keep original package structure; AGP will generate R under namespace
           cat > settings.gradle << 'EOF'
           pluginManagement {
-              repositories { google(); mavenCentral(); gradlePluginPortal() }
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
           }
           dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories { google(); mavenCentral() }
+              repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
           }
           rootProject.name = "LloydTextFiction"
           include ':app'
           EOF
 
           cat > build.gradle << 'EOF'
+          // Root build — AGP 7.4 works with support libraries + compileSdk 28
           plugins {
-              id 'com.android.application' version '8.2.2' apply false
+              id 'com.android.application' version '7.4.2' apply false
           }
           EOF
 
@@ -58,13 +77,15 @@ jobs:
           org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
           android.useAndroidX=false
           android.enableJetifier=false
+          android.nonTransitiveRClass=false
+          android.defaults.buildfeatures.buildconfig=true
           EOF
 
           mkdir -p gradle/wrapper
           cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
           distributionBase=GRADLE_USER_HOME
           distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.2-bin.zip
+          distributionUrl=https\://services.gradle.org/distributions/gradle-7.6.3-bin.zip
           networkTimeout=10000
           zipStoreBase=GRADLE_USER_HOME
           zipStorePath=wrapper/dists
@@ -74,80 +95,211 @@ jobs:
           plugins {
               id 'com.android.application'
           }
+
           android {
-              namespace 'de.onyxbits.textfiction'
-              compileSdk 28
+              compileSdkVersion 28
+              buildToolsVersion "28.0.3"
+
               defaultConfig {
                   applicationId "ai.lloyd.textfiction"
-                  minSdk 16
-                  targetSdk 28
+                  minSdkVersion 16
+                  targetSdkVersion 28
                   versionCode 12
                   versionName "2.7-lloyd"
               }
+
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_1_8
                   targetCompatibility JavaVersion.VERSION_1_8
               }
+
               buildTypes {
-                  debug { minifyEnabled false }
-                  release { minifyEnabled false }
+                  debug {
+                      minifyEnabled false
+                  }
+                  release {
+                      minifyEnabled false
+                  }
               }
-              lint { abortOnError false; checkReleaseBuilds false }
+
+              lintOptions {
+                  abortOnError false
+                  checkReleaseBuilds false
+              }
+
+              // Old ADT resources sometimes have missing density folders
+              aaptOptions {
+                  cruncherEnabled false
+                  noCompress 'z3', 'z5', 'z8', 'zblorb'
+              }
+
+              sourceSets {
+                  main {
+                      manifest.srcFile 'src/main/AndroidManifest.xml'
+                      java.srcDirs = ['src/main/java']
+                      res.srcDirs = ['src/main/res']
+                      assets.srcDirs = ['src/main/assets']
+                  }
+              }
           }
+
           dependencies {
               implementation 'com.android.support:support-v4:28.0.0'
               implementation 'com.android.support:appcompat-v7:28.0.0'
+              implementation 'com.android.support:support-compat:28.0.0'
+              implementation 'com.android.support:support-fragment:28.0.0'
           }
           EOF
+
+          # Write local.properties so AGP finds the SDK
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+          echo "Created project files"
+          ls -la app/src/main/java/de/onyxbits/textfiction/ | head
 
       - name: Install LloydAgentApi
         run: |
           mkdir -p app/src/main/java/de/onyxbits/textfiction/lloyd
           cp textfiction-lloyd/src/de/onyxbits/textfiction/lloyd/LloydAgentApi.java \
              app/src/main/java/de/onyxbits/textfiction/lloyd/
+          ls -la app/src/main/java/de/onyxbits/textfiction/lloyd/
 
       - name: Patch GameActivity for Lloyd API
         run: |
           python3 << 'PY'
           from pathlib import Path
+          import re
+
           p = Path("app/src/main/java/de/onyxbits/textfiction/GameActivity.java")
           text = p.read_text(encoding="utf-8", errors="replace")
 
+          # 1) Import
           if "lloyd.LloydAgentApi" not in text:
               text = text.replace(
                   "import de.onyxbits.textfiction.input.InputProcessor;",
                   "import de.onyxbits.textfiction.input.InputProcessor;\nimport de.onyxbits.textfiction.lloyd.LloydAgentApi;",
               )
+              print("+ import LloydAgentApi")
 
-          if "lloydApi" not in text:
+          # 2) Field
+          if "lloydApi" not in text or "private LloydAgentApi lloydApi" not in text:
               text = text.replace(
                   "private ProgressBar loading;",
                   "private ProgressBar loading;\n\n\t/** Lloyd autonomous agent HTTP API (port 8765). */\n\tprivate LloydAgentApi lloydApi;",
               )
+              print("+ lloydApi field")
 
-          old_end = """\t\tspeaker = new TextToSpeech(this, this);\n\t\tonSharedPreferenceChanged(prefs, \"\");\n\t\tdimSoftButtonsIfPossible();\n\t}"""
-          new_end = """\t\tspeaker = new TextToSpeech(this, this);\n\t\tonSharedPreferenceChanged(prefs, \"\");\n\t\tdimSoftButtonsIfPossible();\n\n\t\tlloydApi = new LloydAgentApi(LloydAgentApi.DEFAULT_PORT);\n\t\tfinal GameActivity self = this;\n\t\tlloydApi.setCommandSink(new LloydAgentApi.CommandSink() {\n\t\t\t@Override\n\t\t\tpublic void submitCommand(final String command) {\n\t\t\t\tself.runOnUiThread(new Runnable() {\n\t\t\t\t\t@Override\n\t\t\t\t\tpublic void run() {\n\t\t\t\t\t\tif (command != null && command.length() > 0) {\n\t\t\t\t\t\t\texecuteCommand((command + \"\\n\").toCharArray());\n\t\t\t\t\t\t}\n\t\t\t\t\t}\n\t\t\t\t});\n\t\t\t}\n\t\t});\n\t\tlloydApi.start();\n\t\tLog.i(\"LloydAgentApi\", \"listening on port \" + LloydAgentApi.DEFAULT_PORT);\n\t}"""
+          # 3) onCreate — start API after dimSoftButtonsIfPossible()
           if "lloydApi.start" not in text:
-              if old_end not in text:
-                  raise SystemExit("onCreate anchor missing")
-              text = text.replace(old_end, new_end, 1)
+              # Flexible: match the three lines at end of onCreate regardless of exact tabs
+              pattern = re.compile(
+                  r"([ \t]*)speaker = new TextToSpeech\(this, this\);\s*"
+                  r"onSharedPreferenceChanged\(prefs, \"\"\);\s*"
+                  r"dimSoftButtonsIfPossible\(\);\s*"
+                  r"\}",
+                  re.MULTILINE,
+              )
+              m = pattern.search(text)
+              if not m:
+                  raise SystemExit("onCreate anchor missing — dump tail of onCreate:")
+              indent = m.group(1) if m.group(1) else "\t\t"
+              replacement = (
+                  f"{indent}speaker = new TextToSpeech(this, this);\n"
+                  f"{indent}onSharedPreferenceChanged(prefs, \"\");\n"
+                  f"{indent}dimSoftButtonsIfPossible();\n\n"
+                  f"{indent}lloydApi = new LloydAgentApi(LloydAgentApi.DEFAULT_PORT);\n"
+                  f"{indent}final GameActivity self = this;\n"
+                  f"{indent}lloydApi.setCommandSink(new LloydAgentApi.CommandSink() {{\n"
+                  f"{indent}\t@Override\n"
+                  f"{indent}\tpublic void submitCommand(final String command) {{\n"
+                  f"{indent}\t\tself.runOnUiThread(new Runnable() {{\n"
+                  f"{indent}\t\t\t@Override\n"
+                  f"{indent}\t\t\tpublic void run() {{\n"
+                  f"{indent}\t\t\t\tif (command != null && command.length() > 0) {{\n"
+                  f"{indent}\t\t\t\t\texecuteCommand((command + \"\\n\").toCharArray());\n"
+                  f"{indent}\t\t\t\t}}\n"
+                  f"{indent}\t\t\t}}\n"
+                  f"{indent}\t\t}});\n"
+                  f"{indent}\t}}\n"
+                  f"{indent}}});\n"
+                  f"{indent}lloydApi.start();\n"
+                  f"{indent}Log.i(\"LloydAgentApi\", \"listening on port \" + LloydAgentApi.DEFAULT_PORT);\n"
+                  f"\t}}"
+              )
+              text = pattern.sub(replacement, text, count=1)
+              print("+ onCreate lloydApi.start")
 
-          old_destroy = """\tpublic void onDestroy() {\n\t\tprefs.unregisterOnSharedPreferenceChangeListener(this);"""
-          new_destroy = """\tpublic void onDestroy() {\n\t\tif (lloydApi != null) {\n\t\t\tlloydApi.stop();\n\t\t\tlloydApi = null;\n\t\t}\n\t\tprefs.unregisterOnSharedPreferenceChangeListener(this);"""
+          # 4) onDestroy — stop API
           if "lloydApi.stop" not in text:
-              if old_destroy not in text:
+              pattern = re.compile(
+                  r"([ \t]*)public void onDestroy\(\) \{\s*"
+                  r"prefs\.unregisterOnSharedPreferenceChangeListener\(this\);",
+                  re.MULTILINE,
+              )
+              m = pattern.search(text)
+              if not m:
                   raise SystemExit("onDestroy anchor missing")
-              text = text.replace(old_destroy, new_destroy, 1)
+              indent = m.group(1) if m.group(1) else "\t"
+              replacement = (
+                  f"{indent}public void onDestroy() {{\n"
+                  f"{indent}\tif (lloydApi != null) {{\n"
+                  f"{indent}\t\tlloydApi.stop();\n"
+                  f"{indent}\t\tlloydApi = null;\n"
+                  f"{indent}\t}}\n"
+                  f"{indent}\tprefs.unregisterOnSharedPreferenceChangeListener(this);"
+              )
+              text = pattern.sub(replacement, text, count=1)
+              print("+ onDestroy lloydApi.stop")
 
-          old_pub = """\t\tflipView(showLower);\n\t\tfigurePromptStyle();\n\t\tfigureMenuState();\n\t}\n\n\t/**\n\t * Show the correct prompt.\n\t */\n\tprivate void figurePromptStyle() {"""
-          new_pub = """\t\tflipView(showLower);\n\t\tfigurePromptStyle();\n\t\tfigureMenuState();\n\n\t\tif (lloydApi != null && retainerFragment != null && retainerFragment.engine != null) {\n\t\t\tStringBuilder story = new StringBuilder();\n\t\t\ttry {\n\t\t\t\tfor (int i = 0; i < retainerFragment.messageBuffer.size(); i++) {\n\t\t\t\t\tStoryItem item = retainerFragment.messageBuffer.get(i);\n\t\t\t\t\tif (item != null && item.message != null) {\n\t\t\t\t\t\tif (story.length() > 0) story.append(\"\\n\");\n\t\t\t\t\t\tstory.append(item.message.toString());\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t} catch (Exception e) {\n\t\t\t\tLog.w(\"LloydAgentApi\", e);\n\t\t\t}\n\t\t\tboolean waiting = retainerFragment.engine.getRunState() == ZMachine.STATE_WAIT_CMD;\n\t\t\tlloydApi.publishState(story.toString(), retainerFragment.upperWindow, waiting);\n\t\t}\n\t}\n\n\t/**\n\t * Show the correct prompt.\n\t */\n\tprivate void figurePromptStyle() {"""
+          # 5) End of publishResult — publish state to agent
           if "publishState" not in text:
-              if old_pub not in text:
+              pattern = re.compile(
+                  r"([ \t]*)flipView\(showLower\);\s*"
+                  r"figurePromptStyle\(\);\s*"
+                  r"figureMenuState\(\);\s*"
+                  r"\}\s*"
+                  r"/\*\*\s*\* Show the correct prompt\.\s*\*/\s*"
+                  r"private void figurePromptStyle\(\) \{",
+                  re.MULTILINE,
+              )
+              m = pattern.search(text)
+              if not m:
                   raise SystemExit("publishResult anchor missing")
-              text = text.replace(old_pub, new_pub, 1)
+              indent = m.group(1) if m.group(1) else "\t\t"
+              replacement = (
+                  f"{indent}flipView(showLower);\n"
+                  f"{indent}figurePromptStyle();\n"
+                  f"{indent}figureMenuState();\n\n"
+                  f"{indent}if (lloydApi != null && retainerFragment != null && retainerFragment.engine != null) {{\n"
+                  f"{indent}\tStringBuilder story = new StringBuilder();\n"
+                  f"{indent}\ttry {{\n"
+                  f"{indent}\t\tfor (int i = 0; i < retainerFragment.messageBuffer.size(); i++) {{\n"
+                  f"{indent}\t\t\tStoryItem item = retainerFragment.messageBuffer.get(i);\n"
+                  f"{indent}\t\t\tif (item != null && item.message != null) {{\n"
+                  f"{indent}\t\t\t\tif (story.length() > 0) story.append(\"\\n\");\n"
+                  f"{indent}\t\t\t\tstory.append(item.message.toString());\n"
+                  f"{indent}\t\t\t}}\n"
+                  f"{indent}\t\t}}\n"
+                  f"{indent}\t}} catch (Exception e) {{\n"
+                  f"{indent}\t\tLog.w(\"LloydAgentApi\", e);\n"
+                  f"{indent}\t}}\n"
+                  f"{indent}\tboolean waiting = retainerFragment.engine.getRunState() == ZMachine.STATE_WAIT_CMD;\n"
+                  f"{indent}\tlloydApi.publishState(story.toString(), retainerFragment.upperWindow, waiting);\n"
+                  f"{indent}}}\n"
+                  f"\t}}\n\n"
+                  f"\t/**\n"
+                  f"\t * Show the correct prompt.\n"
+                  f"\t */\n"
+                  f"\tprivate void figurePromptStyle() {{"
+              )
+              text = pattern.sub(replacement, text, count=1)
+              print("+ publishResult publishState")
 
           p.write_text(text)
           print("GameActivity patched OK")
+          # sanity
+          for needle in ("LloydAgentApi", "lloydApi.start", "lloydApi.stop", "publishState"):
+              if needle not in text:
+                  raise SystemExit(f"missing after patch: {needle}")
           PY
 
       - name: Write AndroidManifest with INTERNET
@@ -200,14 +352,31 @@ jobs:
           </manifest>
           XML
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+      - name: Generate Gradle wrapper
+        run: |
+          set -e
+          # Download official wrapper jar so we don't need a pre-installed gradle
+          curl -fsSL -o gradle/wrapper/gradle-wrapper.jar \
+            https://raw.githubusercontent.com/gradle/gradle/v7.6.3/gradle/wrapper/gradle-wrapper.jar
+          cat > gradlew << 'EOF'
+          #!/bin/sh
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          exec java -classpath "$DIR/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain "$@"
+          EOF
+          chmod +x gradlew
+          ls -la gradlew gradle/wrapper/
 
       - name: Build debug APK
         run: |
-          gradle wrapper --gradle-version 8.2 || true
-          chmod +x gradlew 2>/dev/null || true
-          ./gradlew assembleDebug --no-daemon --stacktrace || gradle assembleDebug --no-daemon --stacktrace
+          set -e
+          export ANDROID_HOME="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" || true
+          ./gradlew assembleDebug --no-daemon --stacktrace --info 2>&1 | tee /tmp/build.log
+          echo "==== last 80 lines ===="
+          tail -80 /tmp/build.log
+          test -f app/build/outputs/apk/debug/*.apk || test -d app/build/outputs/apk/debug
+          ls -la app/build/outputs/apk/debug/ || (echo "APK missing"; exit 1)
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -215,3 +384,4 @@ jobs:
           name: lloyd-textfiction-apk
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
+          if-no-files-found: error
