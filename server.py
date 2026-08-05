@@ -1,8 +1,13 @@
 """
 Lloyd Local + Deployable Server
 ===============================
-Works on localhost and cloud hosts.
-Same original brain: pure-NumPy chat + pure-NumPy images.
+Full agent mind connection:
+  /chat          — agent think (straight to mind)
+  /vision        — image → memory + optional pattern learn
+  /audio         — transcript / audio note → think
+  /textfiction/* — play + learn from Text Fiction APK sessions
+  /status        — agent health
+  /upload /train /train_images /export /import — existing
 """
 
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -11,19 +16,29 @@ from pathlib import Path
 import sys
 import os
 import tempfile
+import base64
+import time
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from lloyd.agent import Lloyd
 from lloyd.trainer import LloydTrainer
 
+try:
+    from lloyd.text_fiction_bridge import TextFictionBridge
+except ImportError:
+    from text_fiction_bridge import TextFictionBridge  # type: ignore
+
 trainer = LloydTrainer()
 lloyd = Lloyd(trainer=trainer)
+tf_bridge = TextFictionBridge(lloyd=lloyd, trainer=trainer)
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 BRAIN_DIR = Path("brains")
 BRAIN_DIR.mkdir(exist_ok=True)
+VISION_DIR = Path("vision_inbox")
+VISION_DIR.mkdir(exist_ok=True)
 
 
 class LloydHandler(SimpleHTTPRequestHandler):
@@ -35,11 +50,32 @@ class LloydHandler(SimpleHTTPRequestHandler):
         )
 
     def do_GET(self):
-        if self.path == "/" or self.path == "/index.html":
+        path = self.path.split("?")[0]
+
+        if path == "/" or path == "/index.html":
             self.path = "/index.html"
             return super().do_GET()
 
-        if self.path == "/export":
+        if path == "/status":
+            try:
+                tstat = trainer.status() if trainer else "no trainer"
+                payload = {
+                    "agent": "lloyd",
+                    "mode": "agent-only",
+                    "mind": "online",
+                    "vision": "online",
+                    "audio": "online",
+                    "textfiction": tf_bridge.status(),
+                    "trainer": tstat,
+                    "autonomy": lloyd.autonomy.status() if hasattr(lloyd, "autonomy") else "n/a",
+                    "ts": time.time(),
+                }
+                self._json_response(payload)
+            except Exception as e:
+                self._json_response({"error": str(e)}, status=500)
+            return
+
+        if path == "/export":
             try:
                 out = BRAIN_DIR / "lloyd_export.lloyd"
                 lloyd.export_brain(out, trainer=trainer)
@@ -57,39 +93,169 @@ class LloydHandler(SimpleHTTPRequestHandler):
                 self._json_response({"error": str(e)}, status=500)
             return
 
+        if path == "/textfiction/status":
+            self._json_response(tf_bridge.status())
+            return
+
         return super().do_GET()
 
     def do_POST(self):
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
+        path = self.path.split("?")[0]
 
-        if self.path == "/chat":
+        if path == "/chat":
             try:
-                data = json.loads(body.decode())
-                user_msg = data.get("message", "").strip()
+                data = json.loads(body.decode()) if body else {}
+                user_msg = (data.get("message") or "").strip()
                 if not user_msg:
-                    self._json_response({"reply": "yo say something"})
+                    self._json_response({"reply": "yo say something", "agent": True})
                     return
                 result = lloyd.think(user_msg)
                 if isinstance(result, dict):
                     payload = {
-                        "reply": result.get("message", ""),
+                        "reply": result.get("message", result.get("reply", "")),
                         "image": result.get("image"),
                         "id": result.get("id"),
+                        "agent": True,
+                        "mind": "direct",
                     }
                 else:
-                    payload = {"reply": result}
+                    payload = {"reply": str(result), "agent": True, "mind": "direct"}
                 self._json_response(payload)
             except Exception as e:
-                self._json_response({"reply": f"error: {e}"}, status=500)
+                self._json_response({"reply": f"error: {e}", "agent": True}, status=500)
+            return
 
-        elif self.path == "/upload":
+        if path == "/vision":
+            try:
+                data = json.loads(body.decode()) if body else {}
+                caption = (data.get("caption") or data.get("prompt") or "scene").strip()
+                b64 = data.get("image_b64") or data.get("image") or ""
+                learn = bool(data.get("learn", True))
+                saved = None
+                if b64:
+                    if "," in b64:
+                        b64 = b64.split(",", 1)[1]
+                    raw = base64.b64decode(b64)
+                    saved = VISION_DIR / f"vision_{int(time.time())}.bin"
+                    saved.write_bytes(raw)
+                note = f"vision seen: {caption}"
+                if saved:
+                    note += f" | file={saved.name} bytes={saved.stat().st_size}"
+                lloyd.remember(note)
+                reply_bits = [note]
+                agent_reply = lloyd.think(
+                    f"you just saw an image described as: {caption}. react briefly as agent."
+                )
+                if isinstance(agent_reply, dict):
+                    agent_reply = agent_reply.get("message") or agent_reply.get("reply") or ""
+                reply_bits.append(str(agent_reply)[:400])
+                if learn and trainer is not None:
+                    try:
+                        trainer.train_on_text(note + " " + str(agent_reply), steps=6, lr=0.008)
+                        reply_bits.append("vision trained")
+                    except Exception:
+                        pass
+                self._json_response({
+                    "ok": True,
+                    "vision": True,
+                    "caption": caption,
+                    "saved": str(saved) if saved else None,
+                    "reply": " | ".join(reply_bits),
+                    "agent": True,
+                })
+            except Exception as e:
+                self._json_response({"error": str(e), "vision": True}, status=500)
+            return
+
+        if path == "/audio":
+            try:
+                data = json.loads(body.decode()) if body else {}
+                transcript = (
+                    data.get("transcript") or data.get("text") or data.get("message") or ""
+                ).strip()
+                meta = data.get("meta") or {}
+                if not transcript:
+                    self._json_response({
+                        "reply": "no transcript — send speech-to-text text",
+                        "audio": True,
+                    })
+                    return
+                lloyd.remember(f"audio heard: {transcript[:500]}")
+                result = lloyd.think(transcript)
+                if isinstance(result, dict):
+                    reply = result.get("message") or result.get("reply") or ""
+                    image = result.get("image")
+                else:
+                    reply = str(result)
+                    image = None
+                self._json_response({
+                    "reply": reply,
+                    "image": image,
+                    "audio": True,
+                    "transcript": transcript[:300],
+                    "meta": meta,
+                    "agent": True,
+                    "mind": "direct",
+                })
+            except Exception as e:
+                self._json_response({"error": str(e), "audio": True}, status=500)
+            return
+
+        if path == "/textfiction/observe":
+            try:
+                data = json.loads(body.decode()) if body else {}
+                out = tf_bridge.observe(
+                    room_text=data.get("room_text") or data.get("room") or "",
+                    choices=data.get("choices") or [],
+                    command=data.get("command") or data.get("player") or "",
+                    session_id=data.get("session_id") or "default",
+                    meta=data.get("meta"),
+                )
+                self._json_response({**out, "agent": True})
+            except Exception as e:
+                self._json_response({"error": str(e)}, status=500)
+            return
+
+        if path == "/textfiction/suggest":
+            try:
+                data = json.loads(body.decode()) if body else {}
+                sid = data.get("session_id") or "default"
+                if data.get("room_text") or data.get("room"):
+                    tf_bridge.observe(
+                        room_text=data.get("room_text") or data.get("room") or "",
+                        choices=data.get("choices") or [],
+                        session_id=sid,
+                    )
+                out = tf_bridge.suggest_command(sid)
+                self._json_response({**out, "agent": True})
+            except Exception as e:
+                self._json_response({"error": str(e)}, status=500)
+            return
+
+        if path == "/textfiction/learn":
+            try:
+                data = json.loads(body.decode()) if body else {}
+                sid = data.get("session_id") or "default"
+                steps = int(data.get("steps", 20))
+                out = tf_bridge.learn(sid, steps=steps)
+                try:
+                    trainer.save_brain(BRAIN_DIR / "latest_brain.npz")
+                    lloyd.memory.save(str(BRAIN_DIR / "latest_memory.json"))
+                except Exception:
+                    pass
+                self._json_response({**out, "agent": True})
+            except Exception as e:
+                self._json_response({"error": str(e)}, status=500)
+            return
+
+        if path == "/upload":
             try:
                 content_type = self.headers.get("Content-Type", "")
                 if "multipart/form-data" not in content_type:
                     self._json_response({"error": "expected multipart"}, status=400)
                     return
-
                 body_str = body.decode("utf-8", errors="ignore")
                 if "filename=" in body_str:
                     fname = f"train_{len(list(UPLOAD_DIR.glob('*')))}.txt"
@@ -99,51 +265,41 @@ class LloydHandler(SimpleHTTPRequestHandler):
                         text = parts[1].split("\r\n--")[0]
                         fpath.write_text(text, encoding="utf-8")
                         lloyd.remember(f"User uploaded training file: {fname}")
-                        self._json_response(
-                            {
-                                "status": "ok",
-                                "filename": fname,
-                                "message": f"got it. saved as {fname}. hit Train when ready.",
-                            }
-                        )
+                        self._json_response({
+                            "status": "ok",
+                            "filename": fname,
+                            "message": f"got it. saved as {fname}. hit Train when ready.",
+                        })
                         return
                 self._json_response({"error": "could not parse file"}, status=400)
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
+            return
 
-        elif self.path == "/train":
+        if path == "/train":
             try:
                 files = list(UPLOAD_DIR.glob("*.txt"))
                 if not files:
-                    self._json_response(
-                        {"message": "no files uploaded yet. upload a .txt first."}
-                    )
+                    self._json_response({"message": "no files uploaded yet. upload a .txt first."})
                     return
-
                 result = trainer.train_on_files(files, steps_per_file=40)
-
                 for f in files:
                     text = f.read_text(encoding="utf-8", errors="ignore")[:300]
                     lloyd.remember(f"Trained on {f.name}: {text}")
-
                 trainer.save_brain(BRAIN_DIR / "latest_brain.npz")
                 lloyd.memory.save(str(BRAIN_DIR / "latest_memory.json"))
                 try:
                     lloyd.image_gen.save(BRAIN_DIR / "latest_image_net.npz")
                 except Exception:
                     pass
-
-                self._json_response(
-                    {
-                        "message": result["message"]
-                        + " "
-                        + " | ".join(result.get("reports", [])[:3])
-                    }
-                )
+                self._json_response({
+                    "message": result["message"] + " " + " | ".join(result.get("reports", [])[:3])
+                })
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
+            return
 
-        elif self.path == "/train_images":
+        if path == "/train_images":
             try:
                 data = {}
                 if body:
@@ -153,9 +309,7 @@ class LloydHandler(SimpleHTTPRequestHandler):
                         data = {}
                 epochs = int(data.get("epochs", 40))
                 n_images = int(data.get("n_images", 100))
-                result = lloyd.image_gen.train_pattern_images(
-                    epochs=epochs, n_images=n_images
-                )
+                result = lloyd.image_gen.train_pattern_images(epochs=epochs, n_images=n_images)
                 if "error" in result:
                     self._json_response(result, status=500)
                     return
@@ -163,19 +317,18 @@ class LloydHandler(SimpleHTTPRequestHandler):
                     lloyd.image_gen.save(BRAIN_DIR / "latest_image_net.npz")
                 except Exception:
                     pass
-                self._json_response(
-                    {
-                        "message": result.get(
-                            "message",
-                            f"trained {epochs} epochs on {n_images} hardcoded pixel arrays",
-                        ),
-                        **{k: v for k, v in result.items() if k != "message"},
-                    }
-                )
+                self._json_response({
+                    "message": result.get(
+                        "message",
+                        f"trained {epochs} epochs on {n_images} hardcoded pixel arrays",
+                    ),
+                    **{k: v for k, v in result.items() if k != "message"},
+                })
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
+            return
 
-        elif self.path == "/import":
+        if path == "/import":
             try:
                 with tempfile.NamedTemporaryFile(suffix=".lloyd", delete=False) as tmp:
                     tmp.write(body)
@@ -185,9 +338,9 @@ class LloydHandler(SimpleHTTPRequestHandler):
                 self._json_response({"message": msg})
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
+            return
 
-        else:
-            self.send_error(404)
+        self.send_error(404)
 
     def _json_response(self, data, status=200):
         body = json.dumps(data).encode()
@@ -234,7 +387,8 @@ def run():
             pass
 
     server = HTTPServer(("0.0.0.0", port), LloydHandler)
-    print(f"Lloyd is live on port {port}")
+    print(f"Lloyd agent mind live on port {port}")
+    print("Endpoints: /chat /vision /audio /textfiction/* /status /export ...")
     server.serve_forever()
 
 
