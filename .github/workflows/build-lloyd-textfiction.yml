@@ -35,8 +35,6 @@ jobs:
       - name: Clone official TextFiction source
         run: |
           git clone --depth 1 https://github.com/onyxbits/TextFiction.git /tmp/TextFiction
-          echo "Source tree:"
-          find /tmp/TextFiction -maxdepth 3 -type d | head -40
 
       - name: Create Gradle project
         run: |
@@ -46,7 +44,6 @@ jobs:
           cp -a /tmp/TextFiction/res/. app/src/main/res/
           cp -a /tmp/TextFiction/assets/. app/src/main/assets/ 2>/dev/null || true
 
-          # Keep original package structure; AGP will generate R under namespace
           cat > settings.gradle << 'EOF'
           pluginManagement {
               repositories {
@@ -67,7 +64,6 @@ jobs:
           EOF
 
           cat > build.gradle << 'EOF'
-          // Root build — AGP 7.4 works with support libraries + compileSdk 28
           plugins {
               id 'com.android.application' version '7.4.2' apply false
           }
@@ -79,16 +75,6 @@ jobs:
           android.enableJetifier=false
           android.nonTransitiveRClass=false
           android.defaults.buildfeatures.buildconfig=true
-          EOF
-
-          mkdir -p gradle/wrapper
-          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-7.6.3-bin.zip
-          networkTimeout=10000
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
           EOF
 
           cat > app/build.gradle << 'EOF'
@@ -114,12 +100,8 @@ jobs:
               }
 
               buildTypes {
-                  debug {
-                      minifyEnabled false
-                  }
-                  release {
-                      minifyEnabled false
-                  }
+                  debug { minifyEnabled false }
+                  release { minifyEnabled false }
               }
 
               lintOptions {
@@ -127,19 +109,9 @@ jobs:
                   checkReleaseBuilds false
               }
 
-              // Old ADT resources sometimes have missing density folders
               aaptOptions {
                   cruncherEnabled false
                   noCompress 'z3', 'z5', 'z8', 'zblorb'
-              }
-
-              sourceSets {
-                  main {
-                      manifest.srcFile 'src/main/AndroidManifest.xml'
-                      java.srcDirs = ['src/main/java']
-                      res.srcDirs = ['src/main/res']
-                      assets.srcDirs = ['src/main/assets']
-                  }
               }
           }
 
@@ -151,9 +123,7 @@ jobs:
           }
           EOF
 
-          # Write local.properties so AGP finds the SDK
-          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
-          echo "Created project files"
+          echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
           ls -la app/src/main/java/de/onyxbits/textfiction/ | head
 
       - name: Install LloydAgentApi
@@ -161,7 +131,6 @@ jobs:
           mkdir -p app/src/main/java/de/onyxbits/textfiction/lloyd
           cp textfiction-lloyd/src/de/onyxbits/textfiction/lloyd/LloydAgentApi.java \
              app/src/main/java/de/onyxbits/textfiction/lloyd/
-          ls -la app/src/main/java/de/onyxbits/textfiction/lloyd/
 
       - name: Patch GameActivity for Lloyd API
         run: |
@@ -172,7 +141,6 @@ jobs:
           p = Path("app/src/main/java/de/onyxbits/textfiction/GameActivity.java")
           text = p.read_text(encoding="utf-8", errors="replace")
 
-          # 1) Import
           if "lloyd.LloydAgentApi" not in text:
               text = text.replace(
                   "import de.onyxbits.textfiction.input.InputProcessor;",
@@ -180,17 +148,14 @@ jobs:
               )
               print("+ import LloydAgentApi")
 
-          # 2) Field
-          if "lloydApi" not in text or "private LloydAgentApi lloydApi" not in text:
+          if "private LloydAgentApi lloydApi" not in text:
               text = text.replace(
                   "private ProgressBar loading;",
                   "private ProgressBar loading;\n\n\t/** Lloyd autonomous agent HTTP API (port 8765). */\n\tprivate LloydAgentApi lloydApi;",
               )
               print("+ lloydApi field")
 
-          # 3) onCreate — start API after dimSoftButtonsIfPossible()
           if "lloydApi.start" not in text:
-              # Flexible: match the three lines at end of onCreate regardless of exact tabs
               pattern = re.compile(
                   r"([ \t]*)speaker = new TextToSpeech\(this, this\);\s*"
                   r"onSharedPreferenceChanged\(prefs, \"\"\);\s*"
@@ -200,8 +165,8 @@ jobs:
               )
               m = pattern.search(text)
               if not m:
-                  raise SystemExit("onCreate anchor missing — dump tail of onCreate:")
-              indent = m.group(1) if m.group(1) else "\t\t"
+                  raise SystemExit("onCreate anchor missing")
+              indent = m.group(1) or "\t\t"
               replacement = (
                   f"{indent}speaker = new TextToSpeech(this, this);\n"
                   f"{indent}onSharedPreferenceChanged(prefs, \"\");\n"
@@ -228,7 +193,6 @@ jobs:
               text = pattern.sub(replacement, text, count=1)
               print("+ onCreate lloydApi.start")
 
-          # 4) onDestroy — stop API
           if "lloydApi.stop" not in text:
               pattern = re.compile(
                   r"([ \t]*)public void onDestroy\(\) \{\s*"
@@ -238,7 +202,7 @@ jobs:
               m = pattern.search(text)
               if not m:
                   raise SystemExit("onDestroy anchor missing")
-              indent = m.group(1) if m.group(1) else "\t"
+              indent = m.group(1) or "\t"
               replacement = (
                   f"{indent}public void onDestroy() {{\n"
                   f"{indent}\tif (lloydApi != null) {{\n"
@@ -250,7 +214,6 @@ jobs:
               text = pattern.sub(replacement, text, count=1)
               print("+ onDestroy lloydApi.stop")
 
-          # 5) End of publishResult — publish state to agent
           if "publishState" not in text:
               pattern = re.compile(
                   r"([ \t]*)flipView\(showLower\);\s*"
@@ -264,7 +227,7 @@ jobs:
               m = pattern.search(text)
               if not m:
                   raise SystemExit("publishResult anchor missing")
-              indent = m.group(1) if m.group(1) else "\t\t"
+              indent = m.group(1) or "\t\t"
               replacement = (
                   f"{indent}flipView(showLower);\n"
                   f"{indent}figurePromptStyle();\n"
@@ -296,7 +259,6 @@ jobs:
 
           p.write_text(text)
           print("GameActivity patched OK")
-          # sanity
           for needle in ("LloydAgentApi", "lloydApi.start", "lloydApi.stop", "publishState"):
               if needle not in text:
                   raise SystemExit(f"missing after patch: {needle}")
@@ -352,30 +314,22 @@ jobs:
           </manifest>
           XML
 
-      - name: Generate Gradle wrapper
-        run: |
-          set -e
-          # Download official wrapper jar so we don't need a pre-installed gradle
-          curl -fsSL -o gradle/wrapper/gradle-wrapper.jar \
-            https://raw.githubusercontent.com/gradle/gradle/v7.6.3/gradle/wrapper/gradle-wrapper.jar
-          cat > gradlew << 'EOF'
-          #!/bin/sh
-          DIR="$(cd "$(dirname "$0")" && pwd)"
-          exec java -classpath "$DIR/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain "$@"
-          EOF
-          chmod +x gradlew
-          ls -la gradlew gradle/wrapper/
+      - name: Setup Gradle 7.6.3
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "7.6.3"
+          cache-disabled: true
 
       - name: Build debug APK
         run: |
           set -e
           export ANDROID_HOME="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
           echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
           ls "$ANDROID_HOME/platforms" || true
-          ./gradlew assembleDebug --no-daemon --stacktrace --info 2>&1 | tee /tmp/build.log
-          echo "==== last 80 lines ===="
-          tail -80 /tmp/build.log
-          test -f app/build/outputs/apk/debug/*.apk || test -d app/build/outputs/apk/debug
+          gradle assembleDebug --no-daemon --stacktrace 2>&1 | tee /tmp/build.log
+          echo "==== last 100 lines ===="
+          tail -100 /tmp/build.log
           ls -la app/build/outputs/apk/debug/ || (echo "APK missing"; exit 1)
 
       - name: Upload APK
