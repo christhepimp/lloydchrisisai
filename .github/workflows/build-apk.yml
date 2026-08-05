@@ -45,17 +45,38 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: Allow cleartext HTTP (Termux local IP)
+      - name: Android permissions — camera, mic, cleartext
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           sed -i 's/<application /<application android:usesCleartextTraffic="true" /' "$MANIFEST"
           mkdir -p android/app/src/main/res/xml
-          echo '<?xml version="1.0" encoding="utf-8"?>' > android/app/src/main/res/xml/network_security_config.xml
-          echo '<network-security-config>' >> android/app/src/main/res/xml/network_security_config.xml
-          echo '  <base-config cleartextTrafficPermitted="true" />' >> android/app/src/main/res/xml/network_security_config.xml
-          echo '</network-security-config>' >> android/app/src/main/res/xml/network_security_config.xml
+          cat > android/app/src/main/res/xml/network_security_config.xml << 'XML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <network-security-config>
+            <base-config cleartextTrafficPermitted="true" />
+          </network-security-config>
+          XML
           sed -i 's/<application /<application android:networkSecurityConfig="@xml\/network_security_config" /' "$MANIFEST"
-          grep -E 'usesCleartextTraffic|networkSecurityConfig' "$MANIFEST" || true
+          if ! grep -q 'android.permission.CAMERA' "$MANIFEST"; then
+            sed -i '/<manifest /a\    <uses-permission android:name="android.permission.CAMERA" />' "$MANIFEST"
+          fi
+          if ! grep -q 'android.permission.RECORD_AUDIO' "$MANIFEST"; then
+            sed -i '/<manifest /a\    <uses-permission android:name="android.permission.RECORD_AUDIO" />' "$MANIFEST"
+          fi
+          if ! grep -q 'android.permission.MODIFY_AUDIO_SETTINGS' "$MANIFEST"; then
+            sed -i '/<manifest /a\    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />' "$MANIFEST"
+          fi
+          if ! grep -q 'android.permission.INTERNET' "$MANIFEST"; then
+            sed -i '/<manifest /a\    <uses-permission android:name="android.permission.INTERNET" />' "$MANIFEST"
+          fi
+          if ! grep -q 'android.hardware.camera' "$MANIFEST"; then
+            sed -i '/<manifest /a\    <uses-feature android:name="android.hardware.camera" android:required="false" />' "$MANIFEST"
+          fi
+          if ! grep -q 'android.hardware.microphone' "$MANIFEST"; then
+            sed -i '/<manifest /a\    <uses-feature android:name="android.hardware.microphone" android:required="false" />' "$MANIFEST"
+          fi
+          echo "=== Manifest permissions ==="
+          grep -E 'uses-permission|uses-feature|usesCleartextTraffic|networkSecurityConfig' "$MANIFEST" || true
 
       - name: Make gradlew executable
         run: chmod +x android/gradlew
