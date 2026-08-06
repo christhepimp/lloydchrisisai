@@ -57,6 +57,7 @@ class Lloyd:
         self.moltbook = MoltbookLoop(self)
         self.autonomy = get_autonomy(self)
         self.emu_bridge = None  # set by server.py when EmuBridge is live
+        self.mcp = None  # set by server.py when MCP client is live
         self.last_amp_report = ""
         self._think_count = 0
         self._last_offline_try = 0.0
@@ -66,10 +67,11 @@ class Lloyd:
             "wake and sleep on my own schedule",
             "agent tools: remember, recall, draw, moltbook, train",
             "play PS2 via ARMSX2: see hear act learn",
+            "connect emulator via MCP (mcp-pine / PINE)",
         ]
         self.system_prompt = get_system_prompt()
         print("Lloyd is online. Agent mode only — no chatbot layer.")
-        print("Pipeline: agent router | moltbook | free autonomy | amplifier → multi-head | emu")
+        print("Pipeline: agent router | moltbook | free autonomy | amplifier → multi-head | emu | mcp")
 
     def set_trainer(self, trainer):
         self.trainer = trainer
@@ -116,11 +118,6 @@ class Lloyd:
             pass
 
     def _agent_talk(self, user_input: str) -> str:
-        """
-        Agent talk only — no chatbot phrase engine.
-        Order: neural agent reply → memory hit → short agent ack.
-        """
-        # 1) pure-numpy model as agent voice (if trained enough)
         if self.trainer is not None:
             try:
                 neural = self.trainer.generate_reply(user_input, max_new=48)
@@ -130,8 +127,6 @@ class Lloyd:
                         return neural.strip()[:240]
             except Exception:
                 pass
-
-        # 2) memory as agent knowledge
         try:
             hits = self.memory.search(user_input, top_k=3)
             if hits:
@@ -139,12 +134,10 @@ class Lloyd:
                 return "agent recall: " + " | ".join(bits)
         except Exception:
             pass
-
-        # 3) minimal agent ack (not a chatbot script)
         return (
             "agent online — give a task: "
             "moltbook learn | free on | remember … | recall … | draw … | "
-            "ps2 play | ps2 learn | status"
+            "ps2 play | mcp connect | status"
         )
 
     def _try_special(self, user_input: str) -> str | None:
@@ -179,7 +172,9 @@ class Lloyd:
         if lower.startswith("moltbook") or lower.startswith("molt "):
             return self._moltbook_cmd(text)
 
-        # ---- PS2 / ARMSX2 chat commands ----
+        if lower.startswith("mcp") or lower in ("pine status", "pine ping"):
+            return self._mcp_cmd(text)
+
         if lower.startswith("ps2") or lower.startswith("emu ") or lower in (
             "play ps2", "ps2 play", "ps2 learn", "emu status", "ps2 status"
         ):
@@ -283,8 +278,89 @@ class Lloyd:
 
         return None
 
+    def _mcp_cmd(self, text: str) -> str:
+        """Chat surface for MCP → mcp-pine → ARMSX2/PCSX2."""
+        if self.mcp is None:
+            try:
+                from lloyd.mcp_client import get_mcp
+                self.mcp = get_mcp()
+            except Exception as e:
+                return f"mcp offline — {e}"
+
+        rest = re.sub(r"^(mcp|pine)\s+", "", text.strip(), flags=re.I).strip()
+        low = rest.lower() if rest else "status"
+
+        if not rest or low in ("help", "?", "commands"):
+            return (
+                "mcp cmds (ARMSX2 via mcp-pine/PINE):\n"
+                "• mcp status | mcp connect | mcp disconnect\n"
+                "• mcp tools | mcp ping | mcp info\n"
+                "• mcp sync — feed emu session from PINE\n"
+                "• mcp call <tool> [json args]\n"
+                "HTTP: /mcp/connect /mcp/call /mcp/sync"
+            )
+
+        if low in ("status",):
+            st = self.mcp.status()
+            return (
+                f"mcp enabled={st.get('enabled')} connected={st.get('connected')} "
+                f"tools={st.get('tool_count')} transport={st.get('transport')} "
+                f"err={st.get('last_error')}"
+            )
+
+        if low in ("connect", "start", "on"):
+            self.mcp.config["enabled"] = True
+            out = self.mcp.connect()
+            if out.get("ok"):
+                return f"mcp connected | tools={out.get('tools')}"
+            return f"mcp connect failed: {out.get('error')}"
+
+        if low in ("disconnect", "stop", "off"):
+            self.mcp.disconnect()
+            return "mcp disconnected"
+
+        if low in ("tools", "list"):
+            if not self.mcp.connected:
+                self.mcp.config["enabled"] = True
+                self.mcp.connect()
+            names = [t.get("name") for t in self.mcp.list_tools()]
+            return "mcp tools: " + (", ".join(names) if names else "(none — connect first)")
+
+        if low in ("ping",):
+            out = self.mcp.pine_ping()
+            return out.get("text") or str(out)[:300]
+
+        if low in ("info", "game", "title"):
+            out = self.mcp.pine_get_info()
+            return out.get("text") or str(out)[:400]
+
+        if low in ("sync", "pull", "feed"):
+            if self.emu_bridge is None:
+                return "emu bridge offline — start server.py"
+            if not self.mcp.connected:
+                self.mcp.config["enabled"] = True
+                conn = self.mcp.connect()
+                if not conn.get("ok"):
+                    return f"mcp connect failed: {conn.get('error')}"
+            out = self.mcp.feed_emu_bridge(self.emu_bridge, session_id="default")
+            return f"mcp sync ok | {str(out)[:240]}"
+
+        if low.startswith("call "):
+            payload = rest[5:].strip()
+            parts = payload.split(None, 1)
+            name = parts[0]
+            args = {}
+            if len(parts) > 1:
+                try:
+                    args = json.loads(parts[1])
+                except Exception:
+                    return "usage: mcp call <tool> {\"arg\":1}"
+            out = self.mcp.call_tool(name, args)
+            return out.get("text") or str(out)[:400]
+
+        return "mcp: status | connect | tools | ping | info | sync | call <tool> {json}"
+
     def _ps2_cmd(self, text: str) -> str:
-        """Chat surface for ARMSX2 / PS2 agent loop."""
         if self.emu_bridge is None:
             return "emu bridge offline — start server.py so /emu/* is live"
 
@@ -298,7 +374,8 @@ class Lloyd:
                 "• ps2 play [goal] — one decide+act step\n"
                 "• ps2 learn — train on trajectory\n"
                 "• ps2 decide [goal] — choose action only\n"
-                "HTTP under the hood: /emu/frame /emu/audio /emu/action /emu/play /emu/learn"
+                "• mcp connect — live PINE memory via MCP\n"
+                "HTTP: /emu/* and /mcp/*"
             )
 
         if low in ("status", "emu status", "ps2 status") or "status" in low:
@@ -306,7 +383,11 @@ class Lloyd:
             sess = st.get("sessions") or {}
             n = len(sess)
             learns = st.get("total_learns", 0)
-            return f"ARMSX2 bridge online | sessions={n} | learns={learns} | backend={st.get('backend')}"
+            mcp_bit = ""
+            if self.mcp is not None:
+                ms = self.mcp.status()
+                mcp_bit = f" | mcp={ms.get('connected')}"
+            return f"ARMSX2 bridge online | sessions={n} | learns={learns} | backend={st.get('backend')}{mcp_bit}"
 
         if low.startswith("learn") or low == "ps2 learn":
             out = self.emu_bridge.learn(session_id="default", steps=24)
@@ -325,7 +406,7 @@ class Lloyd:
 
         return (
             "ps2 cmds: status | play [goal] | learn | decide [goal]\n"
-            "push frames via POST /emu/frame first"
+            "mcp connect for live PINE memory"
         )
 
     def _moltbook_cmd(self, text: str) -> str:
@@ -425,8 +506,12 @@ class Lloyd:
             tstat = self.trainer.status() if self.trainer else "no trainer"
             mode = "WRITE" if self.moltbook.allow_post else "READ-ONLY"
             emu = "emu=on" if self.emu_bridge else "emu=off"
+            mcp_s = "mcp=off"
+            if self.mcp is not None:
+                st = self.mcp.status()
+                mcp_s = f"mcp={st.get('connected')}"
             reply = (
-                f"agent lloyd | {self.autonomy.status()} | moltbook={mode} | {emu} | {tstat}"
+                f"agent lloyd | {self.autonomy.status()} | moltbook={mode} | {emu} | {mcp_s} | {tstat}"
             )
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             self._learn(user_input, reply)
@@ -438,6 +523,7 @@ class Lloyd:
                 "• free on / off | wake | sleep | autonomy status\n"
                 "• moltbook learn | status | allow post\n"
                 "• ps2 status | ps2 play [goal] | ps2 learn\n"
+                "• mcp connect | mcp status | mcp sync | mcp info\n"
                 "• remember … | recall … | draw …\n"
                 "• start training | api keys"
             )
@@ -446,12 +532,11 @@ class Lloyd:
             return reply
 
         if intent == "train_hint":
-            reply = "free on — or moltbook learn for one pull — or ps2 learn after frames"
+            reply = "free on — or moltbook learn for one pull — or ps2 learn after frames — or mcp sync"
             self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
             self._learn(user_input, reply)
             return reply
 
-        # Default: agent talk only (no chatbot simple_reply)
         reply = self._agent_talk(user_input)
         reply = apply_genz_style(reply)
         self.memory.add(f"Lloyd: {reply}", {"role": "lloyd"})
@@ -498,12 +583,13 @@ class Lloyd:
             except Exception:
                 pass
             meta = {
-                "version": "0.19",
+                "version": "0.20",
                 "goals": self.goals,
                 "agent_only": True,
                 "has_moltbook": True,
                 "has_free_autonomy": True,
                 "has_emu_bridge": True,
+                "has_mcp": True,
                 "moltbook_read_only": not self.moltbook.allow_post,
                 "total_reward": self.rewards.total_reward,
             }
