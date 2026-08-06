@@ -7,6 +7,7 @@ Full agent mind connection:
   /audio         — transcript / audio note → think
   /textfiction/* — play + learn from Text Fiction APK sessions
   /emu/*         — ARMSX2 full-state: every tick/action/reaction → brain
+  /mcp/*         — MCP client → mcp-pine → ARMSX2/PCSX2 PINE
   /status        — agent health
   /upload /train /train_images /export /import — existing
 """
@@ -36,11 +37,19 @@ try:
 except ImportError:
     from emu_bridge import EmuBridge  # type: ignore
 
+try:
+    from lloyd.mcp_client import get_mcp
+except ImportError:
+    get_mcp = None  # type: ignore
+
 trainer = LloydTrainer()
 lloyd = Lloyd(trainer=trainer)
 tf_bridge = TextFictionBridge(lloyd=lloyd, trainer=trainer)
 emu_bridge = EmuBridge(lloyd=lloyd, trainer=trainer)
 lloyd.emu_bridge = emu_bridge
+mcp = get_mcp() if get_mcp else None
+if mcp is not None:
+    lloyd.mcp = mcp
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -66,14 +75,17 @@ class LloydHandler(SimpleHTTPRequestHandler):
         if path == "/status":
             try:
                 tstat = trainer.status() if trainer else "no trainer"
-                self._json_response({
+                payload = {
                     "agent": "lloyd", "mode": "agent-only", "mind": "online",
                     "vision": "online", "audio": "online",
                     "textfiction": tf_bridge.status(), "emu": emu_bridge.status(),
                     "trainer": tstat,
                     "autonomy": lloyd.autonomy.status() if hasattr(lloyd, "autonomy") else "n/a",
                     "ts": time.time(),
-                })
+                }
+                if mcp is not None:
+                    payload["mcp"] = mcp.status()
+                self._json_response(payload)
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
             return
@@ -115,6 +127,23 @@ class LloydHandler(SimpleHTTPRequestHandler):
             self._json_response(emu_bridge.drain_inputs(sid, max_n=max_n))
             return
 
+        # ---- MCP ----
+        if path == "/mcp/status":
+            if mcp is None:
+                self._json_response({"error": "mcp module missing"}, status=500)
+            else:
+                self._json_response(mcp.status())
+            return
+
+        if path == "/mcp/tools":
+            if mcp is None:
+                self._json_response({"error": "mcp module missing"}, status=500)
+            else:
+                if not mcp.connected:
+                    mcp.connect()
+                self._json_response({"tools": mcp.list_tools()})
+            return
+
         return super().do_GET()
 
     def do_POST(self):
@@ -137,6 +166,73 @@ class LloydHandler(SimpleHTTPRequestHandler):
                 self._json_response(payload)
             except Exception as e:
                 self._json_response({"reply": f"error: {e}", "agent": True}, status=500)
+            return
+
+        # ---- MCP ----
+        if path == "/mcp/connect":
+            if mcp is None:
+                self._json_response({"error": "mcp module missing"}, status=500)
+            else:
+                # allow body to override enable
+                try:
+                    data = json.loads(body.decode()) if body else {}
+                except Exception:
+                    data = {}
+                if data.get("enabled") is not None:
+                    mcp.config["enabled"] = bool(data["enabled"])
+                if data.get("command"):
+                    mcp.config["command"] = data["command"]
+                if data.get("args"):
+                    mcp.config["args"] = data["args"]
+                if data.get("http_url"):
+                    mcp.config["http_url"] = data["http_url"]
+                    mcp.config["transport"] = "http"
+                if data.get("env") and isinstance(data["env"], dict):
+                    mcp.config.setdefault("env", {}).update(data["env"])
+                mcp.config["enabled"] = True
+                self._json_response(mcp.connect())
+            return
+
+        if path == "/mcp/disconnect":
+            if mcp is None:
+                self._json_response({"error": "mcp module missing"}, status=500)
+            else:
+                self._json_response(mcp.disconnect())
+            return
+
+        if path == "/mcp/call":
+            if mcp is None:
+                self._json_response({"error": "mcp module missing"}, status=500)
+            else:
+                try:
+                    data = json.loads(body.decode()) if body else {}
+                    name = data.get("name") or data.get("tool") or ""
+                    arguments = data.get("arguments") or data.get("args") or {}
+                    if not name:
+                        self._json_response({"error": "missing tool name"}, status=400)
+                        return
+                    self._json_response(mcp.call_tool(name, arguments))
+                except Exception as e:
+                    self._json_response({"error": str(e)}, status=500)
+            return
+
+        if path == "/mcp/sync":
+            if mcp is None:
+                self._json_response({"error": "mcp module missing"}, status=500)
+            else:
+                try:
+                    data = json.loads(body.decode()) if body else {}
+                    sid = data.get("session") or data.get("session_id") or "default"
+                    if not mcp.connected:
+                        mcp.config["enabled"] = True
+                        conn = mcp.connect()
+                        if not conn.get("ok"):
+                            self._json_response(conn, status=500)
+                            return
+                    out = mcp.feed_emu_bridge(emu_bridge, session_id=sid, game=data.get("game") or "")
+                    self._json_response({**out, "agent": True})
+                except Exception as e:
+                    self._json_response({"error": str(e)}, status=500)
             return
 
         if path == "/vision":
@@ -228,7 +324,6 @@ class LloydHandler(SimpleHTTPRequestHandler):
                 self._json_response({"error": str(e)}, status=500)
             return
 
-        # ---- ARMSX2 full-state: every action + reaction into brain ----
         if path == "/emu/tick":
             try:
                 data = json.loads(body.decode()) if body else {}
@@ -480,9 +575,15 @@ def run():
             print("Restored previous image net")
         except Exception:
             pass
+    if mcp is not None and mcp.enabled():
+        try:
+            print("MCP connect:", mcp.connect())
+        except Exception as e:
+            print("MCP auto-connect failed:", e)
     server = HTTPServer(("0.0.0.0", port), LloydHandler)
     print(f"Lloyd agent mind live on port {port}")
-    print("Endpoints: /chat /vision /audio /emu/* /textfiction/* /status /export ...")
+    print("Endpoints: /chat /vision /audio /emu/* /mcp/* /textfiction/* /status /export ...")
+    print("MCP: /mcp/connect /mcp/call /mcp/sync /mcp/status (mcp-pine → PINE → ARMSX2)")
     print("ARMSX2 full-state: /emu/tick /emu/values /emu/memread /emu/rules /emu/reaction /emu/action ...")
     server.serve_forever()
 
