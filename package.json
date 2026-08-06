@@ -1,12 +1,16 @@
 {
   "name": "lloyd",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Lloyd — original autonomous AI agent",
   "private": true,
   "scripts": {
     "build:web": "echo web UI is static — nothing to build",
     "cap:sync": "npx cap sync",
-    "cap:open": "npx cap open android"
+    "cap:open": "npx cap open android",
+    "apk:setup": "npm install && cp mobile/capacitor.config.json . && npx cap add android && npx cap sync",
+    "apk:sync": "cp mobile/capacitor.config.json . 2>/dev/null; npx cap sync",
+    "apk:open": "npx cap open android",
+    "apk:hint": "echo Open Android Studio → Build → Build APK. PS2 API settings are inside the Lloyd app (PS2 button)."
   },
   "dependencies": {
     "@capacitor/android": "^6.0.0",

@@ -1,48 +1,29 @@
 # armsx2-lloyd
 
-Bridge package notes for connecting **Lloyd** to **[ARMSX2](https://github.com/ARMSX2/ARMSX2)**.
+Bridge notes for **Lloyd** ↔ **[ARMSX2](https://github.com/ARMSX2/ARMSX2)**.
 
-- Core implementation lives in `lloyd/emu_bridge.py`
-- HTTP routes live on `server.py` under `/emu/*`
-- Full docs: `docs/ARMSX2.md`
+- Core: `lloyd/emu_bridge.py`
+- HTTP: `server.py` → `/emu/*`
+- Docs: `docs/ARMSX2.md`, **`docs/ARMSX2_APK.md`** (APK + API settings)
+- Stub: `host_stub.py`
 
 ## Do not vendor ARMSX2 here
-
-Clone upstream yourself if you need the full emulator:
 
 ```bash
 git clone --depth 1 https://github.com/ARMSX2/ARMSX2.git
 ```
 
-Build per their README (Android NDK / CMake). Lloyd only needs the HTTP bridge.
+Build per upstream. Lloyd only needs the HTTP bridge.
 
-## Minimal host capture stub
+## APK
 
-```python
-# host_stub.py — push captions while you play; poll inputs
-import json, urllib.request
+The **Lloyd Capacitor APK** embeds the PS2 API settings UI (session, game, goal, play, learn).  
+Install stock ARMSX2 separately. See `docs/ARMSX2_APK.md`.
 
-BASE = "http://127.0.0.1:8080"
+## Host stub
 
-def post(path, data):
-    req = urllib.request.Request(
-        BASE + path,
-        data=json.dumps(data).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    return json.loads(urllib.request.urlopen(req).read())
-
-def get(path):
-    return json.loads(urllib.request.urlopen(BASE + path).read())
-
-post("/emu/frame", {
-    "session": "demo",
-    "game": "My ISO",
-    "caption": "in-game: character standing in field",
-})
-print(post("/emu/play", {"session": "demo", "goal": "explore"}))
-print(get("/emu/inputs?session=demo"))
+```bash
+python armsx2-lloyd/host_stub.py
+# or with a caption:
+python armsx2-lloyd/host_stub.py menu arcade mode highlighted
 ```
-
-Map returned `buttons` / `sticks` to whatever input path you use (virtual pad, ADB, future plugin).
