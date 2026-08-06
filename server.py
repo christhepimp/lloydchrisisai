@@ -1,15 +1,8 @@
 """
 Lloyd Local + Deployable Server
 ===============================
-Full agent mind connection:
-  /chat          — agent think (straight to mind)
-  /vision        — image → memory + optional pattern learn
-  /audio         — transcript / audio note → think
-  /textfiction/* — play + learn from Text Fiction APK sessions
-  /emu/*         — ARMSX2 full-state: every tick/action/reaction → brain
-  /mcp/*         — MCP client → mcp-pine → ARMSX2/PCSX2 PINE
-  /status        — agent health
-  /upload /train /train_images /export /import — existing
+  /chat /vision /audio /textfiction/* /emu/* /mcp/* /pine/* /status
+  /pine = FULL PINE opcode set (pure Python)
 """
 
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -42,6 +35,11 @@ try:
 except ImportError:
     get_mcp = None  # type: ignore
 
+try:
+    from lloyd.pine_client import get_pine
+except ImportError:
+    get_pine = None  # type: ignore
+
 trainer = LloydTrainer()
 lloyd = Lloyd(trainer=trainer)
 tf_bridge = TextFictionBridge(lloyd=lloyd, trainer=trainer)
@@ -50,6 +48,9 @@ lloyd.emu_bridge = emu_bridge
 mcp = get_mcp() if get_mcp else None
 if mcp is not None:
     lloyd.mcp = mcp
+pine = get_pine() if get_pine else None
+if pine is not None:
+    lloyd.pine = pine
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -85,6 +86,8 @@ class LloydHandler(SimpleHTTPRequestHandler):
                 }
                 if mcp is not None:
                     payload["mcp"] = mcp.status()
+                if pine is not None:
+                    payload["pine"] = pine.status_dict()
                 self._json_response(payload)
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
@@ -127,21 +130,25 @@ class LloydHandler(SimpleHTTPRequestHandler):
             self._json_response(emu_bridge.drain_inputs(sid, max_n=max_n))
             return
 
-        # ---- MCP ----
         if path == "/mcp/status":
-            if mcp is None:
-                self._json_response({"error": "mcp module missing"}, status=500)
-            else:
-                self._json_response(mcp.status())
+            self._json_response(mcp.status() if mcp else {"error": "mcp missing"})
             return
 
         if path == "/mcp/tools":
             if mcp is None:
-                self._json_response({"error": "mcp module missing"}, status=500)
+                self._json_response({"error": "mcp missing"}, status=500)
             else:
                 if not mcp.connected:
                     mcp.connect()
                 self._json_response({"tools": mcp.list_tools()})
+            return
+
+        if path == "/pine/status":
+            self._json_response(pine.status_dict() if pine else {"error": "pine missing"})
+            return
+
+        if path == "/pine/features":
+            self._json_response({"features": pine.features() if pine else [], "note": "full official PINE opcode set"})
             return
 
         return super().do_GET()
@@ -168,18 +175,64 @@ class LloydHandler(SimpleHTTPRequestHandler):
                 self._json_response({"reply": f"error: {e}", "agent": True}, status=500)
             return
 
-        # ---- MCP ----
-        if path == "/mcp/connect":
-            if mcp is None:
-                self._json_response({"error": "mcp module missing"}, status=500)
+        # ---- FULL PINE ----
+        if path == "/pine/connect":
+            if pine is None:
+                self._json_response({"error": "pine missing"}, status=500)
             else:
-                # allow body to override enable
                 try:
                     data = json.loads(body.decode()) if body else {}
                 except Exception:
                     data = {}
-                if data.get("enabled") is not None:
-                    mcp.config["enabled"] = bool(data["enabled"])
+                for k in ("slot", "host", "socket_path", "timeout_s"):
+                    if data.get(k) is not None:
+                        pine.config[k] = data[k]
+                self._json_response(pine.connect())
+            return
+
+        if path == "/pine/disconnect":
+            self._json_response(pine.disconnect() if pine else {"error": "pine missing"})
+            return
+
+        if path == "/pine/call":
+            if pine is None:
+                self._json_response({"error": "pine missing"}, status=500)
+            else:
+                try:
+                    data = json.loads(body.decode()) if body else {}
+                    op = data.get("op") or data.get("method") or data.get("command") or "info"
+                    args = {k: v for k, v in data.items() if k not in ("op", "method", "command")}
+                    self._json_response(pine.call(op, **args))
+                except Exception as e:
+                    self._json_response({"error": str(e)}, status=500)
+            return
+
+        if path == "/pine/sync":
+            if pine is None:
+                self._json_response({"error": "pine missing"}, status=500)
+            else:
+                try:
+                    data = json.loads(body.decode()) if body else {}
+                    if not pine.connected:
+                        conn = pine.connect()
+                        if not conn.get("ok"):
+                            self._json_response(conn, status=500)
+                            return
+                    out = pine.sync_to_emu(emu_bridge, session_id=data.get("session") or "default")
+                    self._json_response({**out, "agent": True})
+                except Exception as e:
+                    self._json_response({"error": str(e)}, status=500)
+            return
+
+        if path == "/mcp/connect":
+            if mcp is None:
+                self._json_response({"error": "mcp missing"}, status=500)
+            else:
+                try:
+                    data = json.loads(body.decode()) if body else {}
+                except Exception:
+                    data = {}
+                mcp.config["enabled"] = True
                 if data.get("command"):
                     mcp.config["command"] = data["command"]
                 if data.get("args"):
@@ -187,22 +240,18 @@ class LloydHandler(SimpleHTTPRequestHandler):
                 if data.get("http_url"):
                     mcp.config["http_url"] = data["http_url"]
                     mcp.config["transport"] = "http"
-                if data.get("env") and isinstance(data["env"], dict):
+                if data.get("env"):
                     mcp.config.setdefault("env", {}).update(data["env"])
-                mcp.config["enabled"] = True
                 self._json_response(mcp.connect())
             return
 
         if path == "/mcp/disconnect":
-            if mcp is None:
-                self._json_response({"error": "mcp module missing"}, status=500)
-            else:
-                self._json_response(mcp.disconnect())
+            self._json_response(mcp.disconnect() if mcp else {"error": "mcp missing"})
             return
 
         if path == "/mcp/call":
             if mcp is None:
-                self._json_response({"error": "mcp module missing"}, status=500)
+                self._json_response({"error": "mcp missing"}, status=500)
             else:
                 try:
                     data = json.loads(body.decode()) if body else {}
@@ -218,18 +267,17 @@ class LloydHandler(SimpleHTTPRequestHandler):
 
         if path == "/mcp/sync":
             if mcp is None:
-                self._json_response({"error": "mcp module missing"}, status=500)
+                self._json_response({"error": "mcp missing"}, status=500)
             else:
                 try:
                     data = json.loads(body.decode()) if body else {}
-                    sid = data.get("session") or data.get("session_id") or "default"
                     if not mcp.connected:
                         mcp.config["enabled"] = True
                         conn = mcp.connect()
                         if not conn.get("ok"):
                             self._json_response(conn, status=500)
                             return
-                    out = mcp.feed_emu_bridge(emu_bridge, session_id=sid, game=data.get("game") or "")
+                    out = mcp.feed_emu_bridge(emu_bridge, session_id=data.get("session") or "default", game=data.get("game") or "")
                     self._json_response({**out, "agent": True})
                 except Exception as e:
                     self._json_response({"error": str(e)}, status=500)
@@ -250,43 +298,34 @@ class LloydHandler(SimpleHTTPRequestHandler):
                     saved.write_bytes(raw)
                 note = f"vision seen: {caption}"
                 if saved:
-                    note += f" | file={saved.name} bytes={saved.stat().st_size}"
+                    note += f" | file={saved.name}"
                 lloyd.remember(note)
-                reply_bits = [note]
-                agent_reply = lloyd.think(f"you just saw an image described as: {caption}. react briefly as agent.")
+                agent_reply = lloyd.think(f"you just saw: {caption}. react briefly.")
                 if isinstance(agent_reply, dict):
                     agent_reply = agent_reply.get("message") or agent_reply.get("reply") or ""
-                reply_bits.append(str(agent_reply)[:400])
                 if learn and trainer is not None:
                     try:
                         trainer.train_on_text(note + " " + str(agent_reply), steps=6, lr=0.008)
-                        reply_bits.append("vision trained")
                     except Exception:
                         pass
-                self._json_response({"ok": True, "vision": True, "caption": caption, "saved": str(saved) if saved else None, "reply": " | ".join(reply_bits), "agent": True})
+                self._json_response({"ok": True, "vision": True, "caption": caption, "reply": str(agent_reply)[:400], "agent": True})
             except Exception as e:
-                self._json_response({"error": str(e), "vision": True}, status=500)
+                self._json_response({"error": str(e)}, status=500)
             return
 
         if path == "/audio":
             try:
                 data = json.loads(body.decode()) if body else {}
                 transcript = (data.get("transcript") or data.get("text") or data.get("message") or "").strip()
-                meta = data.get("meta") or {}
                 if not transcript:
-                    self._json_response({"reply": "no transcript — send speech-to-text text", "audio": True})
+                    self._json_response({"reply": "no transcript", "audio": True})
                     return
                 lloyd.remember(f"audio heard: {transcript[:500]}")
                 result = lloyd.think(transcript)
-                if isinstance(result, dict):
-                    reply = result.get("message") or result.get("reply") or ""
-                    image = result.get("image")
-                else:
-                    reply = str(result)
-                    image = None
-                self._json_response({"reply": reply, "image": image, "audio": True, "transcript": transcript[:300], "meta": meta, "agent": True, "mind": "direct"})
+                reply = result.get("message") or result.get("reply") if isinstance(result, dict) else str(result)
+                self._json_response({"reply": reply, "audio": True, "agent": True})
             except Exception as e:
-                self._json_response({"error": str(e), "audio": True}, status=500)
+                self._json_response({"error": str(e)}, status=500)
             return
 
         if path == "/textfiction/observe":
@@ -324,17 +363,11 @@ class LloydHandler(SimpleHTTPRequestHandler):
                 self._json_response({"error": str(e)}, status=500)
             return
 
+        # emu routes (full agent loop)
         if path == "/emu/tick":
             try:
                 data = json.loads(body.decode()) if body else {}
-                sid = data.get("session") or data.get("session_id") or "default"
-                out = emu_bridge.tick(
-                    session_id=sid, game=data.get("game") or "",
-                    frame=data.get("frame"), audio=data.get("audio"),
-                    values=data.get("values"), mem=data.get("mem"),
-                    action=data.get("action"), reaction=data.get("reaction"),
-                    t_game=float(data.get("t_game") or 0), note=data.get("note") or "",
-                )
+                out = emu_bridge.tick(session_id=data.get("session") or data.get("session_id") or "default", game=data.get("game") or "", frame=data.get("frame"), audio=data.get("audio"), values=data.get("values"), mem=data.get("mem"), action=data.get("action"), reaction=data.get("reaction"), t_game=float(data.get("t_game") or 0), note=data.get("note") or "")
                 self._json_response({**out, "agent": True})
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
@@ -343,11 +376,10 @@ class LloydHandler(SimpleHTTPRequestHandler):
         if path == "/emu/values":
             try:
                 data = json.loads(body.decode()) if body else {}
-                sid = data.get("session") or data.get("session_id") or "default"
                 vals = data.get("values")
                 if vals is None:
                     vals = {k: v for k, v in data.items() if k not in ("session", "session_id", "game")}
-                out = emu_bridge.observe_values(session_id=sid, values=vals, game=data.get("game") or "")
+                out = emu_bridge.observe_values(session_id=data.get("session") or "default", values=vals, game=data.get("game") or "")
                 self._json_response({**out, "agent": True})
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
@@ -356,8 +388,7 @@ class LloydHandler(SimpleHTTPRequestHandler):
         if path == "/emu/memread":
             try:
                 data = json.loads(body.decode()) if body else {}
-                sid = data.get("session") or data.get("session_id") or "default"
-                out = emu_bridge.observe_mem(session_id=sid, reads=data.get("reads"), blob_b64=data.get("blob_b64") or "", base_addr=str(data.get("base_addr") or ""))
+                out = emu_bridge.observe_mem(session_id=data.get("session") or "default", reads=data.get("reads"), blob_b64=data.get("blob_b64") or "", base_addr=str(data.get("base_addr") or ""))
                 self._json_response({**out, "agent": True})
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
@@ -366,11 +397,7 @@ class LloydHandler(SimpleHTTPRequestHandler):
         if path == "/emu/rules":
             try:
                 data = json.loads(body.decode()) if body else {}
-                sid = data.get("session") or data.get("session_id") or "default"
-                rules = data.get("rules")
-                if rules is None and data.get("values"):
-                    rules = data
-                out = emu_bridge.load_rules(session_id=sid, rules=rules, path=data.get("path") or "", game=data.get("game") or "")
+                out = emu_bridge.load_rules(session_id=data.get("session") or "default", rules=data.get("rules") or data, path=data.get("path") or "", game=data.get("game") or "")
                 self._json_response({**out, "agent": True})
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
@@ -379,14 +406,8 @@ class LloydHandler(SimpleHTTPRequestHandler):
         if path == "/emu/reaction":
             try:
                 data = json.loads(body.decode()) if body else {}
-                sid = data.get("session") or data.get("session_id") or "default"
-                reac = data.get("reaction")
-                if reac is None:
-                    reac = {k: v for k, v in data.items() if k not in ("session", "session_id", "game", "values", "note")}
-                if hasattr(emu_bridge, "observe_reaction"):
-                    out = emu_bridge.observe_reaction(session_id=sid, reaction=reac, game=data.get("game") or "")
-                else:
-                    out = emu_bridge.tick(session_id=sid, game=data.get("game") or "", reaction=reac, values=data.get("values"), note=data.get("note") or "reaction")
+                reac = data.get("reaction") or {k: v for k, v in data.items() if k not in ("session", "session_id", "game")}
+                out = emu_bridge.observe_reaction(session_id=data.get("session") or "default", reaction=reac, game=data.get("game") or "")
                 self._json_response({**out, "agent": True})
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
@@ -395,8 +416,7 @@ class LloydHandler(SimpleHTTPRequestHandler):
         if path == "/emu/frame":
             try:
                 data = json.loads(body.decode()) if body else {}
-                sid = data.get("session") or data.get("session_id") or "default"
-                out = emu_bridge.observe_vision(session_id=sid, game=data.get("game") or "", image_b64=data.get("image_b64") or data.get("image") or "", width=int(data.get("width") or 0), height=int(data.get("height") or 0), caption=data.get("caption") or data.get("note") or "", fmt=data.get("fmt") or "jpeg")
+                out = emu_bridge.observe_vision(session_id=data.get("session") or "default", game=data.get("game") or "", image_b64=data.get("image_b64") or data.get("image") or "", width=int(data.get("width") or 0), height=int(data.get("height") or 0), caption=data.get("caption") or data.get("note") or "", fmt=data.get("fmt") or "jpeg")
                 self._json_response({**out, "agent": True})
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
@@ -405,8 +425,7 @@ class LloydHandler(SimpleHTTPRequestHandler):
         if path == "/emu/audio":
             try:
                 data = json.loads(body.decode()) if body else {}
-                sid = data.get("session") or data.get("session_id") or "default"
-                out = emu_bridge.observe_audio(session_id=sid, transcript=data.get("transcript") or data.get("text") or "", level=float(data.get("level") or 0), note=data.get("note") or "", pcm_b64=data.get("pcm_b64") or "")
+                out = emu_bridge.observe_audio(session_id=data.get("session") or "default", transcript=data.get("transcript") or data.get("text") or "", level=float(data.get("level") or 0), note=data.get("note") or "", pcm_b64=data.get("pcm_b64") or "")
                 self._json_response({**out, "agent": True})
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
@@ -415,8 +434,7 @@ class LloydHandler(SimpleHTTPRequestHandler):
         if path == "/emu/action":
             try:
                 data = json.loads(body.decode()) if body else {}
-                sid = data.get("session") or data.get("session_id") or "default"
-                out = emu_bridge.act(session_id=sid, buttons=data.get("buttons") or [], sticks=data.get("sticks") or {}, hold_ms=int(data.get("hold_ms") or 50), text=data.get("text") or data.get("reason") or "")
+                out = emu_bridge.act(session_id=data.get("session") or "default", buttons=data.get("buttons") or [], sticks=data.get("sticks") or {}, hold_ms=int(data.get("hold_ms") or 50), text=data.get("text") or data.get("reason") or "")
                 self._json_response({**out, "agent": True})
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
@@ -425,8 +443,7 @@ class LloydHandler(SimpleHTTPRequestHandler):
         if path == "/emu/decide":
             try:
                 data = json.loads(body.decode()) if body else {}
-                out = emu_bridge.decide(session_id=data.get("session") or data.get("session_id") or "default", goal=data.get("goal") or "")
-                self._json_response({**out, "agent": True})
+                self._json_response({**emu_bridge.decide(session_id=data.get("session") or "default", goal=data.get("goal") or ""), "agent": True})
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
             return
@@ -434,8 +451,7 @@ class LloydHandler(SimpleHTTPRequestHandler):
         if path == "/emu/play":
             try:
                 data = json.loads(body.decode()) if body else {}
-                out = emu_bridge.play_step(session_id=data.get("session") or data.get("session_id") or "default", goal=data.get("goal") or "")
-                self._json_response({**out, "agent": True})
+                self._json_response({**emu_bridge.play_step(session_id=data.get("session") or "default", goal=data.get("goal") or ""), "agent": True})
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
             return
@@ -443,7 +459,7 @@ class LloydHandler(SimpleHTTPRequestHandler):
         if path == "/emu/learn":
             try:
                 data = json.loads(body.decode()) if body else {}
-                out = emu_bridge.learn(session_id=data.get("session") or data.get("session_id") or "default", steps=int(data.get("steps") or 24))
+                out = emu_bridge.learn(session_id=data.get("session") or "default", steps=int(data.get("steps") or 24))
                 try:
                     trainer.save_brain(BRAIN_DIR / "latest_brain.npz")
                     lloyd.memory.save(str(BRAIN_DIR / "latest_memory.json"))
@@ -469,7 +485,7 @@ class LloydHandler(SimpleHTTPRequestHandler):
                         text = parts[1].split("\r\n--")[0]
                         fpath.write_text(text, encoding="utf-8")
                         lloyd.remember(f"User uploaded training file: {fname}")
-                        self._json_response({"status": "ok", "filename": fname, "message": f"got it. saved as {fname}. hit Train when ready."})
+                        self._json_response({"status": "ok", "filename": fname})
                         return
                 self._json_response({"error": "could not parse file"}, status=400)
             except Exception as e:
@@ -480,40 +496,21 @@ class LloydHandler(SimpleHTTPRequestHandler):
             try:
                 files = list(UPLOAD_DIR.glob("*.txt"))
                 if not files:
-                    self._json_response({"message": "no files uploaded yet. upload a .txt first."})
+                    self._json_response({"message": "no files uploaded yet"})
                     return
                 result = trainer.train_on_files(files, steps_per_file=40)
-                for f in files:
-                    text = f.read_text(encoding="utf-8", errors="ignore")[:300]
-                    lloyd.remember(f"Trained on {f.name}: {text}")
                 trainer.save_brain(BRAIN_DIR / "latest_brain.npz")
                 lloyd.memory.save(str(BRAIN_DIR / "latest_memory.json"))
-                try:
-                    lloyd.image_gen.save(BRAIN_DIR / "latest_image_net.npz")
-                except Exception:
-                    pass
-                self._json_response({"message": result["message"] + " " + " | ".join(result.get("reports", [])[:3])})
+                self._json_response({"message": result.get("message", "trained")})
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
             return
 
         if path == "/train_images":
             try:
-                data = {}
-                if body:
-                    try:
-                        data = json.loads(body.decode())
-                    except Exception:
-                        data = {}
+                data = json.loads(body.decode()) if body else {}
                 result = lloyd.image_gen.train_pattern_images(epochs=int(data.get("epochs", 40)), n_images=int(data.get("n_images", 100)))
-                if "error" in result:
-                    self._json_response(result, status=500)
-                    return
-                try:
-                    lloyd.image_gen.save(BRAIN_DIR / "latest_image_net.npz")
-                except Exception:
-                    pass
-                self._json_response({"message": result.get("message", "trained"), **{k: v for k, v in result.items() if k != "message"}})
+                self._json_response(result)
             except Exception as e:
                 self._json_response({"error": str(e)}, status=500)
             return
@@ -565,26 +562,22 @@ def run():
     if mem.exists():
         try:
             lloyd.memory.load(str(mem))
-            print("Restored previous memory")
         except Exception:
             pass
-    img_net = BRAIN_DIR / "latest_image_net.npz"
-    if img_net.exists():
+    if pine is not None:
         try:
-            lloyd.image_gen.load(img_net)
-            print("Restored previous image net")
-        except Exception:
-            pass
+            print("PINE:", pine.connect())
+        except Exception as e:
+            print("PINE auto-connect:", e)
     if mcp is not None and mcp.enabled():
         try:
-            print("MCP connect:", mcp.connect())
+            print("MCP:", mcp.connect())
         except Exception as e:
-            print("MCP auto-connect failed:", e)
+            print("MCP:", e)
     server = HTTPServer(("0.0.0.0", port), LloydHandler)
-    print(f"Lloyd agent mind live on port {port}")
-    print("Endpoints: /chat /vision /audio /emu/* /mcp/* /textfiction/* /status /export ...")
-    print("MCP: /mcp/connect /mcp/call /mcp/sync /mcp/status (mcp-pine → PINE → ARMSX2)")
-    print("ARMSX2 full-state: /emu/tick /emu/values /emu/memread /emu/rules /emu/reaction /emu/action ...")
+    print(f"Lloyd live on port {port}")
+    print("PINE full IPC: /pine/connect /pine/call /pine/sync /pine/features")
+    print("MCP optional: /mcp/* | agent loop: /emu/*")
     server.serve_forever()
 
 
