@@ -1,0 +1,15 @@
+{
+  "game": "example_any_ps2_title",
+  "note": "Generic template — replace addr values with cheats/RAM finds for YOUR game. Works for any title.",
+  "values": {
+    "score": { "addr": "0x00000000", "size": 4, "type": "u32" },
+    "health": { "addr": "0x00000000", "size": 4, "type": "u32" },
+    "lives": { "addr": "0x00000000", "size": 1, "type": "u8" },
+    "x": { "addr": "0x00000000", "size": 4, "type": "f32" },
+    "y": { "addr": "0x00000000", "size": 4, "type": "f32" },
+    "z": { "addr": "0x00000000", "size": 4, "type": "f32" },
+    "screen_id": { "addr": "0x00000000", "size": 4, "type": "u32" },
+    "flags": { "addr": "0x00000000", "size": 4, "type": "u32" },
+    "timer": { "addr": "0x00000000", "size": 4, "type": "u32" }
+  }
+}
