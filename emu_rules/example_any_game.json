@@ -1,15 +1,22 @@
 {
   "game": "example_any_ps2_title",
-  "note": "Generic template — replace addr values with cheats/RAM finds for YOUR game. Works for any title.",
+  "note": "Addresses are placeholders — replace with your game's RAM. Reward/win/loss comes from the GAME flags you post in reaction/values, not from Lloyd inventing scores.",
   "values": {
     "score": { "addr": "0x00000000", "size": 4, "type": "u32" },
     "health": { "addr": "0x00000000", "size": 4, "type": "u32" },
     "lives": { "addr": "0x00000000", "size": 1, "type": "u8" },
     "x": { "addr": "0x00000000", "size": 4, "type": "f32" },
     "y": { "addr": "0x00000000", "size": 4, "type": "f32" },
-    "z": { "addr": "0x00000000", "size": 4, "type": "f32" },
-    "screen_id": { "addr": "0x00000000", "size": 4, "type": "u32" },
-    "flags": { "addr": "0x00000000", "size": 4, "type": "u32" },
-    "timer": { "addr": "0x00000000", "size": 4, "type": "u32" }
+    "screen_id": { "addr": "0x00000000", "size": 4, "type": "u32" }
+  },
+  "reward_map": {
+    "win": "win",
+    "won": "win",
+    "victory": "win",
+    "mission_complete": "win",
+    "lose": "lose",
+    "death": "lose",
+    "game_over": "lose",
+    "checkpoint": "progress"
   }
 }
